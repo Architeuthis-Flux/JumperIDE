@@ -10,9 +10,6 @@ import { fetchJSON, fetchArrayBuffer, splitPath } from './utils.js'
 import { compilePython } from './python_utils.js'
 
 const MIP_INDEXES = [{
-    name: 'featured',
-    url:  'https://vsh.pp.ua/mip-featured',
-},{
     name: 'micropython-lib',
     url:  'https://micropython.org/pi/v2',
 }]
