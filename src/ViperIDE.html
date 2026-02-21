@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ViperIDE</title>
-    <link rel="icon" type="image/png" href="assets/favicon.png"/>
+    <title>JumperIDE</title>
+    <link rel="icon" type="image/png" href="assets/icon409.png"/>
     <link rel="manifest" href="manifest.json">
 
     <link rel="stylesheet" href="./app.css">
@@ -13,14 +13,15 @@
     <div id="tool-panel">
         <div>
             <button onclick="app.toggleSideMenu()"><i class="fa-solid fa-bars"></i></button>
-            <span class="logo">ViperIDE</span>
+            <img src="assets/ColorBubbleLogo.png" alt="JumperIDE" class="logo-img"/>
             <button title="Save File [Ctrl+S]"   onclick="app.saveCurrentFile()" id="btn-save"><i class="fa-solid fa-download"></i></button>
-            <button title="Run File [F5]"        onclick="app.runCurrentFile()"  id="btn-run"><i class="fa-solid fa-circle-play" id="btn-run-icon"></i></button>
+            <button title="Run File [F5]"        onclick="app.runCurrentFile()"  id="btn-run"><img id="btn-run-icon" src="assets/iconPlay1024.png" alt="Run" class="btn-run-img"/></button>
         </div>
         <div>
             <button title="Connect WebREPL"      onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
             <button title="Connect Bluetooth"    onclick="app.connectDevice('ble')" id="btn-conn-ble"><i class="fa-brands fa-bluetooth-b"></i></button>
             <button title="Connect USB/Serial"   onclick="app.connectDevice('usb')" id="btn-conn-usb"><i class="fa-brands fa-usb"></i></button>
+            <button title="API Reference" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
             <button title="Full Screen" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
         </div>
     </div>
@@ -32,6 +33,7 @@
                     <a class="tab active" data-target="menu-files"><i class="fa-solid fa-folder fa-fw"></i></a>
                     <a class="tab" data-target="menu-pkg" onclick="app.loadAllPkgIndexes();return false;"><i class="fa-solid fa-cubes fa-fw"></i></a>
                     <a class="tab" data-target="menu-tools"><i class="fa-solid fa-tools fa-fw"></i></a>
+                    <a class="tab" data-target="menu-scripts" onclick="app.loadScriptIndex();return false;"><i class="fa-solid fa-file-code fa-fw"></i></a>
                 </div>
                 <div>
                     <a class="tab" data-target="menu-settings"><i class="fa-solid fa-sliders fa-fw"></i></a>
@@ -54,6 +56,11 @@
             <div id="menu-pkg" class="tab-content">
                 <div id="menu-pkg-title">Package Manager</div>
                 <div id="menu-pkg-list">
+                </div>
+            </div>
+            <div id="menu-scripts" class="tab-content">
+                <div id="menu-scripts-title">Jumperless Scripts</div>
+                <div id="menu-scripts-list">
                 </div>
             </div>
             <div id="menu-tools" class="tab-content">
@@ -144,30 +151,27 @@
                 </div>
             </div>
             <div id="menu-about" class="tab-content">
-                <a class="github-fork-ribbon left-top" href="https://github.com/vshymanskyy/ViperIDE" target="_blank" data-ribbon="Fork me on GitHub" title="Fork me on GitHub">Fork me on GitHub</a>
+                <a class="github-fork-ribbon left-top" href="https://github.com/Architeuthis-Flux/JumperIDE" target="_blank" data-ribbon="Fork me on GitHub" title="Fork me on GitHub">Fork me on GitHub</a>
                 <div style="text-align: center; padding: 50px 0 0 0;">
-                    <img src="assets/logo_1024.png" alt="Logo" width="30%">
-                    <div style="font-size:1.5em;">ViperIDE</div>
+                    <img src="assets/ColorBubbleLogo.png" alt="Logo" width="30%">
+                    <div style="font-size:1.5em;">JumperIDE</div>
                     <div id='viper-ide-version'></div>
                     <small><div id='viper-ide-build'></div></small>
                     <p>
-                        MicroPython Web IDE<br>
-                        by <a class="link" href="https://x.com/vshymanskyy" target="_blank">Volodymyr Shymanskyy</a>
+                        MicroPython Web IDE for Jumperless<br>
+                        Fork of <a class="link" href="https://viper-ide.org/" target="_blank">ViperIDE</a> by <a class="link" href="https://x.com/vshymanskyy" target="_blank">Volodymyr Shymanskyy</a>
                     </p>
                 </div>
                 <div>
                     <hr/>
                     <p id="about-cta">
-                        If you like ViperIDE, please <a class="link" id="gh-star">give it a GitHub star</a> ⭐ and spread the word on social media 📢
+                        If you like JumperIDE, please <a class="link" id="gh-star">give it a GitHub star</a> ⭐ and spread the word 📢
                     </p>
                     <p id="report-bug">
                         You can also <a class="link" id="gh-issues">report a bug</a> 🐞
                     </p>
                     <hr/>
                 </div>
-                <p style="text-align: center;">
-                    With 💙💛 from <a class="link" href="https://stand-with-ukraine.pp.ua" target="_blank">Ukraine</a>
-                </p>
             </div>
         </div>
         <div id="main-editor">
@@ -192,6 +196,12 @@
                     <!-- Logs content goes here -->
                 </div>
             </div>
+        </div>
+        <div id="api-ref-panel" class="collapsed">
+            <div id="api-ref-header">
+                <label><input type="checkbox" id="api-ref-go-to-hovered"/> Go To Hovered Function</label>
+            </div>
+            <iframe id="api-ref-iframe" title="MicroPython API Reference" src="about:blank"></iframe>
         </div>
     </div>
     <div id="dpi-ruler" style="position:absolute;height:1in;width:1in;left:-100%;top:-100%;"></div>

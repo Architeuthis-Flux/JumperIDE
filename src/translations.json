@@ -15,6 +15,7 @@
       "tool.fullscreen": "Full Screen",
       "menu.file-mgr": "File Manager",
       "menu.package-mgr": "Package Manager",
+      "menu.scripts": "Jumperless Scripts",
       "menu.settings": "Settings",
       "settings.conn": "device connection",
       "settings.editor": "editor",

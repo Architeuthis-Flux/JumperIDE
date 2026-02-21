@@ -10,25 +10,29 @@ const cacheName = `viper-${VIPER_IDE_VERSION}`;
 
 const log = console.log.bind(console).bind(console, `[Service Worker ${VIPER_IDE_VERSION}]`);
 
+// Only assets that exist in build/assets (omit optional wasm/tarballs that may 404)
 const contentToCache = new Set([
     '/index.html',
-    '/assets/favicon.png',
-    '/assets/app_1024.png',
-    '/assets/logo_1024.png',
-    '/assets/mpy-cross-v6.wasm',
-    '/assets/micropython.wasm',
-    '/assets/ruff_wasm_bg.wasm',
-    '/assets/tools_vfs.tar.gz',
-    '/assets/vm_vfs.tar.gz',
+    '/assets/icon409.png',
+    '/assets/ColorBubbleLogo.png',
+    '/assets/iconPlay1024.png',
+    '/assets/iconStop1024.png',
 ]);
 
 self.addEventListener('install', event => {
   log('Install');
   event.waitUntil((async () => {
     const cache = await caches.open(cacheName);
-    await Promise.all(contentToCache.values().map(resource => {
-      return cache.add(new Request(resource, { cache: 'no-store' }));
-    }));
+    const results = await Promise.allSettled(
+      [...contentToCache].map(resource =>
+        cache.add(new Request(resource, { cache: 'no-store' }))
+      )
+    );
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        log(`Cache add failed: ${[...contentToCache][i]}`, r.reason?.message ?? r.reason);
+      }
+    });
     self.skipWaiting();
   })());
 });

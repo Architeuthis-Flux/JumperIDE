@@ -41,16 +41,16 @@ import { splitPath, sleep, fetchJSON, getUserUID, getScreenInfo, IdleMonitor,
 
 import { library, dom } from '@fortawesome/fontawesome-svg-core'
 import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
-import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faCubes, faGear,
-         faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate,
+import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
+         faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
 library.add(faUsb, faBluetoothB)
-library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faCubes, faGear,
-         faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate,
+library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
+         faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark)
 library.add(faMessage, faCircleDown)
@@ -198,7 +198,7 @@ async function prepareNewPort(type) {
 
 export async function connectDevice(type) {
     if (port) {
-        if (!confirm('Disconnect current device?')) { return }
+        //if (!confirm('Disconnect current device?')) { return }
         await disconnectDevice()
         return
     }
@@ -569,7 +569,12 @@ async function _loadContent(fn, content, editorElement) {
             if (update.docChanged) {
                 QS(`#menu-file-tree [data-fn="${fn}"]`).classList.add("changed")
             }
+            if (update.selectionSet && QID('api-ref-go-to-hovered')?.checked && !QID('api-ref-panel')?.classList.contains('collapsed')) {
+                if (apiRefGoToHoveredDebounce) clearTimeout(apiRefGoToHoveredDebounce)
+                apiRefGoToHoveredDebounce = setTimeout(() => syncApiRefToHovered(editor), 250)
+            }
         })
+        addApiRefHoverListener(editor)
 
         editorFn = fn
     }
@@ -664,7 +669,9 @@ export async function runCurrentFile() {
     const timeout = -1
     const raw = await MpRawMode.begin(port, soft_reboot)
     try {
-        QID('btn-run-icon').classList.replace('fa-circle-play', 'fa-circle-stop')
+        const btnRunIcon = QID('btn-run-icon')
+        if (btnRunIcon.src) btnRunIcon.src = 'assets/iconStop1024.png'
+        else btnRunIcon.classList.replace('fa-circle-play', 'fa-circle-stop')
         isInRunMode = true
         const emit = true
         await sleep(10)
@@ -683,7 +690,9 @@ export async function runCurrentFile() {
     } finally {
         port.emit = false
         await raw.end()
-        QID('btn-run-icon').classList.replace('fa-circle-stop', 'fa-circle-play')
+        const btnRunIcon = QID('btn-run-icon')
+        if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
+        else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
         isInRunMode = false
         term.write('\r\n>>> ')
     }
@@ -694,6 +703,61 @@ export async function runCurrentFile() {
 /*
  * Package Management
  */
+
+const SCRIPT_INDEX_URL = 'https://docs.jumperless.org/scripts/index.json'
+
+export async function loadScriptIndex() {
+    const listEl = QID('menu-scripts-list')
+    if (!listEl) return
+    listEl.innerHTML = '<div class="title-lines">Loading…</div>'
+    try {
+        const data = await fetchJSON(SCRIPT_INDEX_URL)
+        const scripts = data?.scripts || []
+        listEl.innerHTML = ''
+        if (scripts.length === 0) {
+            listEl.insertAdjacentHTML('beforeend', '<div class="title-lines">No scripts yet</div>')
+            return
+        }
+        for (const script of scripts) {
+            const name = script.name || 'Script'
+            const desc = script.description || ''
+            const url = script.url || ''
+            if (!url) continue
+            const safeName = name.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+            const safeDesc = desc.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+            const safeUrl = url.replace(/"/g, '&quot;')
+            listEl.insertAdjacentHTML('beforeend', `<div>
+                <span><i class="fa-solid fa-file-code fa-fw"></i> ${safeName}</span>
+                <a href="#" class="menu-action" title="Open in editor" data-script-url="${safeUrl}" data-script-name="${safeName}"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
+            </div>`)
+            if (safeDesc) listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-desc">${safeDesc}</div>`)
+        }
+        listEl.querySelectorAll('a[data-script-url]').forEach(a => {
+            a.addEventListener('click', (e) => {
+                e.preventDefault()
+                openScriptFromUrl(a.getAttribute('data-script-url'), a.getAttribute('data-script-name'))
+            })
+        })
+    } catch (err) {
+        listEl.innerHTML = '<div class="title-lines">Failed to load scripts</div>'
+        report('Script index load failed', err)
+    }
+}
+
+export async function openScriptFromUrl(url, suggestedName) {
+    if (!url) return
+    try {
+        const response = await fetch(url, { cache: 'no-store' })
+        if (!response.ok) throw new Error(response.status)
+        const content = await response.text()
+        const baseName = (suggestedName || '').trim() || 'script'
+        const fn = baseName.endsWith('.py') ? baseName : baseName + '.py'
+        await _loadContent(fn, content, createTab(fn))
+    } catch (err) {
+        report('Open script failed', err)
+        toastr.error('Could not load script')
+    }
+}
 
 export async function loadAllPkgIndexes() {
     const pkgList = QID('menu-pkg-list')
@@ -795,6 +859,155 @@ export function autoHideSideMenu() {
     if (window.innerWidth <= 768) {
         fileTree.classList.remove('show')
         overlay.classList.remove('show')
+    }
+}
+
+const API_REF_BASE_URL = 'https://docs.jumperless.org/09.5-micropythonAPIreference/'
+const API_REF_STORAGE_KEY = 'apiRefPanelOpen'
+const API_REF_GO_TO_HOVERED_KEY = 'apiRefGoToHovered'
+let apiRefGoToHoveredDebounce = null
+
+// MkDocs-style slug for heading text (lowercase, non-alphanumeric -> hyphen, collapse)
+function mkdocsSlug(text) {
+    if (!text) return ''
+    return text.toLowerCase()
+        .replace(/_/g, '-')
+        .replace(/[\s(),=[\]]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+}
+
+// Function headings from 09.5-micropythonAPIreference.md (### `name(params)`); symbol -> exact heading slug
+let API_REF_FUNCTION_ANCHORS
+try {
+    API_REF_FUNCTION_ANCHORS = (() => {
+        const headings = [
+            'connect(node1, node2, [duplicates=-1])',
+            'disconnect(node1, node2)',
+            'fast_disconnect(node1, node2)',
+            'is_connected(node1, node2)',
+            'nodes_clear()',
+            'node(name_or_id)',
+            'nodes_save([slot])',
+            'nodes_discard()',
+            'nodes_has_changes()',
+            'switch_slot(slot)',
+            'get_state()',
+            'set_state(json, [clear_first=True])',
+            'get_net_name(netNum)',
+            'set_net_name(netNum, name)',
+            'get_net_color(netNum)',
+            'get_net_color_name(netNum)',
+            'set_net_color(netNum, color, [r], [g], [b])',
+            'set_net_color_hsv(netNum, h, [s], [v])',
+            'get_num_nets()',
+            'get_num_bridges()',
+            'get_net_nodes(netNum)',
+            'get_bridge(bridgeIdx)',
+            'get_net_info(netNum)',
+            'get_num_paths([include_duplicates=True])',
+            'get_path_info(path_idx)',
+            'get_all_paths()',
+            'get_path_between(node1, node2)',
+            'dac_set(channel, voltage, [save=True])',
+            'dac_get(channel)',
+            'adc_get(channel)',
+            'overlay_set(name, x, y, height, width, colors)',
+            'overlay_clear(name)',
+            'overlay_clear_all()',
+            'overlay_shift(name, dx, dy)',
+            'overlay_place(name, x, y)',
+            'overlay_set_pixel(x, y, color)',
+            'overlay_serialize()',
+            'gpio_set(pin, value)',
+            'gpio_get(pin)',
+            'gpio_set_dir(pin, direction)',
+            'gpio_get_dir(pin)',
+            'gpio_set_pull(pin, pull)',
+            'gpio_get_pull(pin)',
+            'gpio_set_read_floating(pin, enabled)',
+            'gpio_get_read_floating(pin)',
+            'pwm(pin, [frequency], [duty_cycle])',
+            'pwm_set_duty_cycle(pin, duty_cycle)',
+            'pwm_set_frequency(pin, frequency)',
+            'pwm_stop(pin)',
+            'ina_get_current(sensor)',
+            'ina_get_voltage(sensor)',
+            'ina_get_bus_voltage(sensor)',
+            'ina_get_power(sensor)',
+            'probe_read([blocking=True])',
+            'probe_button([blocking=True], [consume=False])',
+        ]
+        const map = {}
+        for (const h of headings) {
+            const symbol = h.split('(')[0].trim().toLowerCase().replace(/-/g, '_')
+            map[symbol] = mkdocsSlug(h)
+        }
+        return map
+    })()
+} catch (_err) {
+    API_REF_FUNCTION_ANCHORS = Object.create(null)
+}
+
+function symbolToAnchor(symbol) {
+    try {
+        if (symbol == null || typeof symbol !== 'string') return ''
+        const lower = String(symbol).toLowerCase().replace(/-/g, '_')
+        if (API_REF_FUNCTION_ANCHORS && API_REF_FUNCTION_ANCHORS[lower]) return API_REF_FUNCTION_ANCHORS[lower]
+        return lower.replace(/_/g, '-')
+    } catch (_) {
+        return ''
+    }
+}
+
+function getWordAtPosition(editor, pos) {
+    const doc = editor.state.doc.toString()
+    if (pos < 0 || pos > doc.length) return ''
+    let start = pos
+    while (start > 0 && /[\w_]/.test(doc[start - 1])) start--
+    let end = pos
+    while (end < doc.length && /[\w_]/.test(doc[end])) end++
+    return doc.slice(start, end)
+}
+
+function syncApiRefToHovered(editor, posOverride) {
+    const panel = QID('api-ref-panel')
+    const goToHoveredEl = QID('api-ref-go-to-hovered')
+    if (!panel || panel.classList.contains('collapsed') || !goToHoveredEl?.checked || !editor) return
+    const pos = posOverride !== undefined ? posOverride : editor.state.selection.main.head
+    const word = getWordAtPosition(editor, pos)
+    if (!word) return
+    const anchor = symbolToAnchor(word)
+    const iframe = QID('api-ref-iframe')
+    if (!iframe || !anchor) return
+    const newSrc = API_REF_BASE_URL + '#' + anchor
+    if (iframe.src !== newSrc) iframe.src = newSrc
+}
+
+let apiRefHoverDebounce = null
+function addApiRefHoverListener(editor) {
+    if (!editor?.contentDOM) return
+    editor.contentDOM.addEventListener('mousemove', (e) => {
+        if (!QID('api-ref-go-to-hovered')?.checked || QID('api-ref-panel')?.classList.contains('collapsed')) return
+        if (apiRefHoverDebounce) clearTimeout(apiRefHoverDebounce)
+        apiRefHoverDebounce = setTimeout(() => {
+            const result = editor.posAtCoords({ x: e.clientX, y: e.clientY })
+            if (result != null) syncApiRefToHovered(editor, result.pos)
+        }, 200)
+    })
+}
+
+export function toggleApiRefPanel() {
+    const panel = QID('api-ref-panel')
+    const iframe = QID('api-ref-iframe')
+    if (!panel || !iframe) return
+    panel.classList.toggle('collapsed')
+    const isOpen = !panel.classList.contains('collapsed')
+    try {
+        localStorage.setItem(API_REF_STORAGE_KEY, isOpen ? '1' : '0')
+    } catch (_) {}
+    if (isOpen) {
+        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = API_REF_BASE_URL
     }
 }
 
@@ -909,6 +1122,8 @@ export function applyTranslation() {
 
         QS('#menu-file-title').innerText = T('menu.file-mgr')
         QS('#menu-pkg-title').innerText = T('menu.package-mgr')
+        const scriptsTitle = QS('#menu-scripts-title')
+        if (scriptsTitle) scriptsTitle.innerText = T('menu.scripts')
         QS('#menu-settings-title').innerText = T('menu.settings')
 
         try {
@@ -938,13 +1153,13 @@ export function applyTranslation() {
     }
 
     QSA('a[id=gh-star]').forEach(el => {
-        el.setAttribute('href', 'https://github.com/vshymanskyy/ViperIDE')
+        el.setAttribute('href', 'https://github.com/Architeuthis-Flux/JumperIDE')
         el.setAttribute('target', '_blank')
         el.classList.add('link')
     })
 
     QSA('a[id=gh-issues]').forEach(el => {
-        el.setAttribute('href', 'https://github.com/vshymanskyy/ViperIDE/issues')
+        el.setAttribute('href', 'https://github.com/Architeuthis-Flux/JumperIDE/issues')
         el.setAttribute('target', '_blank')
         el.classList.add('link')
     })
@@ -978,9 +1193,12 @@ export function applyTranslation() {
         if (typeof window.analytics.track === 'undefined') {
             throw new Error()
         }
-
+        // Skip external geo on localhost to avoid CORS errors
+        const isLocalhost = /^localhost$|^127\.\d+\.\d+\.\d+$/.test(window.location.hostname)
         const ua = new UAParser()
-        const geo = await fetchJSON('https://freeipapi.com/api/json')
+        const geo = isLocalhost
+            ? { latitude: 0, longitude: 0, continent: '', countryName: '', regionName: '', cityName: '' }
+            : await fetchJSON('https://freeipapi.com/api/json')
         const scr = getScreenInfo()
 
         let tz
@@ -1051,6 +1269,30 @@ export function applyTranslation() {
 
     setupTabs(QID('side-menu'))
     setupTabs(QID('terminal-container'))
+
+    const apiRefPanel = QID('api-ref-panel')
+    const apiRefIframe = QID('api-ref-iframe')
+    const apiRefGoToHoveredCheckbox = QID('api-ref-go-to-hovered')
+    if (apiRefPanel) {
+        try {
+            if (localStorage.getItem(API_REF_STORAGE_KEY) === '1') {
+                apiRefPanel.classList.remove('collapsed')
+                if (apiRefIframe) apiRefIframe.src = API_REF_BASE_URL
+            } else {
+                apiRefPanel.classList.add('collapsed')
+            }
+        } catch (_) {}
+        if (apiRefGoToHoveredCheckbox) {
+            try {
+            apiRefGoToHoveredCheckbox.checked = localStorage.getItem(API_REF_GO_TO_HOVERED_KEY) === '1'
+            } catch (_) {}
+            apiRefGoToHoveredCheckbox.addEventListener('change', () => {
+                try {
+                    localStorage.setItem(API_REF_GO_TO_HOVERED_KEY, apiRefGoToHoveredCheckbox.checked ? '1' : '0')
+                } catch (_) {}
+            })
+        }
+    }
 
     toastr.options.preventDuplicates = true;
 

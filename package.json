@@ -1,7 +1,7 @@
 {
-  "name": "ViperIDE",
+  "name": "JumperIDE",
   "version": "0.5.2",
-  "description": "An innovative MicroPython / CircuitPython IDE for Web and Mobile",
+  "description": "MicroPython Web IDE for Jumperless",
   "main": "index.js",
   "scripts": {
     "build": "rollup --config",

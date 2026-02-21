@@ -142,6 +142,8 @@ button.connected {
 .fa-download { color: #87c244; }
 .fa-circle-play { color: #3b88c3; }
 .fa-circle-stop { color: #ff7272; }
+.logo-img { height: 30px; width: auto; vertical-align: middle; }
+.btn-run-img { width: 20px; height: 20px; display: block; }
 .fa-circle-info { color: #3b88c3; }
 .fa-file { color: #3b88c3; }
 .fa-file-circle-exclamation { color: #ed4337; }
