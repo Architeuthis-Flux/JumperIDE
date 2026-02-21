@@ -27,7 +27,7 @@ import { WebSerial, WebBluetooth, WebSocketREPL, WebRTCTransport } from './trans
 import { MpRawMode } from './rawmode.js'
 import { getPkgIndexes, rawInstallPkg } from './package_mgr.js'
 import { ConnectionUID } from './connection_uid.js'
-import translations from '../build/translations.json'
+import translations from './translations.json'
 import { parseStackTrace, validatePython, disassembleMPY, minifyPython, prettifyPython } from './python_utils.js'
 import { MicroPythonWASM } from './emulator.js'
 import { getSetting, onSettingChange, updateSetting } from './settings.js'

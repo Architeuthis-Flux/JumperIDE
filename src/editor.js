@@ -275,7 +275,7 @@ const jumperlessPythonExtensions = [
   Prec.highest(jumperlessView.extension),
   EditorView.theme({
     ".cm-jumperless-function": {
-      color: "#8be9fd",
+      color: "#ff79c6",
     },
     ".cm-jumperless-constant": {
       color: "#bd93f9",
@@ -388,11 +388,20 @@ function ruffLinter(ruff) {
 
     const diagnostics = []
     for (let d of res) {
+      const from = doc.line(d.location.row).from + d.location.column - 1
+      const to = doc.line(d.end_location.row).from + d.end_location.column - 1
+      // Treat Jumperless globals as defined (from jumperless import * on device)
+      if (d.code === "F821") {
+        const name = view.state.sliceDoc(from, to).trim()
+        if (JUMPERLESS_FUNCTIONS.has(name) || JUMPERLESS_CONSTANTS.has(name)) {
+          continue
+        }
+      }
       diagnostics.push({
-        from: doc.line(d.location.row).from + d.location.column - 1,
-        to:   doc.line(d.end_location.row).from + d.end_location.column - 1,
-        severity: (d.message.indexOf('Error:') >= 0) ? 'error' : 'warning',
-        message: d.code ? d.code + ': ' + d.message : d.message,
+        from,
+        to,
+        severity: (d.message.indexOf("Error:") >= 0) ? "error" : "warning",
+        message: d.code ? d.code + ": " + d.message : d.message,
       })
     }
     return diagnostics

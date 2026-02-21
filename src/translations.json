@@ -1,0 +1,34 @@
+{
+  "en": {
+    "translation": {
+      "example.hello": "Hello",
+      "example.comment-colors": "Print each letter with a different color",
+      "files.no-files": "no files",
+      "files.used": "used",
+      "tool.save": "Save File",
+      "tool.run": "Run File",
+      "tool.conn.ws": "Connect WebREPL",
+      "tool.conn.ble": "Connect Bluetooth",
+      "tool.conn.usb": "Connect USB/Serial",
+      "tool.clear": "Clear terminal",
+      "tool.terminal": "Terminal",
+      "tool.fullscreen": "Full Screen",
+      "menu.file-mgr": "File Manager",
+      "menu.package-mgr": "Package Manager",
+      "menu.settings": "Settings",
+      "settings.conn": "device connection",
+      "settings.editor": "editor",
+      "settings.other": "other",
+      "settings.interrupt-device": "Interrupt device on Connect",
+      "settings.force-serial-poly": "Force Web Serial polyfill",
+      "settings.expand-minify-json": "Expand/minify JSON",
+      "settings.use-word-wrap": "Word wrap",
+      "settings.render-markdown": "Render Markdown preview",
+      "settings.use-natural-sort": "Natural sort (files)",
+      "settings.lang": "Language",
+      "settings.zoom": "Zoom",
+      "about.cta": "ViperIDE – MicroPython / CircuitPython IDE in the browser.",
+      "about.report-bug": "Report a bug"
+    }
+  }
+}

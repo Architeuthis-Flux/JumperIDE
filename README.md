@@ -36,6 +36,17 @@
 [Documentation](./docs/)  
 [Discussion](https://github.com/orgs/micropython/discussions/15219)  
 
+## Local development
+
+To run the IDE locally for debugging (with watch and source maps):
+
+```bash
+npm install
+npm run start
+```
+
+Then open **http://localhost:10001** in your browser. The first build may take a moment; the dev server serves from the `build/` directory and reloads on changes.
+
 ## Used software
 
 - [CodeMirror](https://codemirror.net) - Main code editor, MIT
