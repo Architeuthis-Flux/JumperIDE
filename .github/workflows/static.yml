@@ -1,4 +1,6 @@
-# Build JumperIDE and deploy to GitHub Pages (your site)
+# Build JumperIDE and deploy the full app to GitHub Pages.
+# Required: In repo Settings → Pages → Build and deployment → Source = "GitHub Actions"
+# (not "Deploy from a branch", or you'll only see the README).
 name: Build and deploy to Pages
 
 on:
