@@ -1033,10 +1033,17 @@ function wordToMicroPythonDocUrl(word, base) {
     return { pageUrl: '', anchor: '', confident: false }
 }
 
-/** HEAD check so we don't navigate to 404s. Returns true if page exists. */
+/** HEAD check so we don't navigate to 404s. Returns true if page exists. Skips fetch for cross-origin URLs to avoid CORS (e.g. docs.micropython.org). */
+// eslint-disable-next-line no-unused-vars -- kept for same-origin doc URL checks and future use
 async function apiRefUrlExists(pageUrl) {
     if (!pageUrl || !pageUrl.startsWith('http')) return false
     try {
+        const pageOrigin = new URL(pageUrl).origin
+        const appOrigin = typeof location !== 'undefined' && location.origin ? location.origin : ''
+        if (appOrigin && pageOrigin !== appOrigin) {
+            if (API_REF_DEBUG) console.log('[API Ref] skip HEAD (cross-origin):', pageUrl)
+            return true
+        }
         const r = await fetch(pageUrl, { method: 'HEAD', cache: 'no-store' })
         if (API_REF_DEBUG) console.log('[API Ref] fetch HEAD', pageUrl, '->', r.status, r.ok ? 'ok' : '')
         return r.ok

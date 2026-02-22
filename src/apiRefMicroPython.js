@@ -325,7 +325,6 @@ export const API_REF_MICROPYTHON_SYMBOLS = Object.freeze({
     staticmethod: { module: 'builtins', anchor: 'staticmethod' },
     abs: { module: 'builtins', anchor: 'abs' },
     all: { module: 'builtins', anchor: 'all' },
-    any: { module: 'builtins', anchor: 'any' },
     bin: { module: 'builtins', anchor: 'bin' },
     callable: { module: 'builtins', anchor: 'callable' },
     chr: { module: 'builtins', anchor: 'chr' },
@@ -391,7 +390,6 @@ export const API_REF_MICROPYTHON_SYMBOLS = Object.freeze({
     allocate_lock: { module: '_thread', anchor: '_thread.allocate_lock' },
     get_ident: { module: '_thread', anchor: '_thread.get_ident' },
     stack_size: { module: '_thread', anchor: '_thread.stack_size' },
-    exit: { module: '_thread', anchor: '_thread.exit' },
 
     // ---- asyncio ----
     asyncio: { module: 'asyncio' },
@@ -479,8 +477,6 @@ export const API_REF_MICROPYTHON_SYMBOLS = Object.freeze({
 
     // ---- vfs ----
     vfs: { module: 'vfs' },
-    VfsFat: { module: 'vfs', anchor: 'vfs.VfsFat' },
-    VfsLfs2: { module: 'vfs', anchor: 'vfs.VfsLfs2' },
     VfsLfs1: { module: 'vfs', anchor: 'vfs.VfsLfs1' },
 
     // ---- btree ----
