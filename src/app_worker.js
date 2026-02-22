@@ -14,7 +14,7 @@ const log = console.log.bind(console).bind(console, `[Service Worker ${VIPER_IDE
 const contentToCache = new Set([
     '/index.html',
     '/assets/icon409.png',
-    '/assets/ColorBubbleLogo.png',
+    '/assets/jumperIDE@0.5x.png',
     '/assets/iconPlay1024.png',
     '/assets/iconStop1024.png',
 ]);

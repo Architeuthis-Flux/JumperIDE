@@ -13,13 +13,15 @@
     <div id="tool-panel">
         <div>
             <button onclick="app.toggleSideMenu()"><i class="fa-solid fa-bars"></i></button>
-            <img src="assets/ColorBubbleLogo.png" alt="JumperIDE" class="logo-img"/>
+            <img src="assets/jumperIDE@0.5x.png" alt="JumperIDE" class="logo-img"/>
             <button title="Save File [Ctrl+S]"   onclick="app.saveCurrentFile()" id="btn-save"><i class="fa-solid fa-download"></i></button>
             <button title="Run File [F5]"        onclick="app.runCurrentFile()"  id="btn-run"><img id="btn-run-icon" src="assets/iconPlay1024.png" alt="Run" class="btn-run-img"/></button>
         </div>
         <div>
-            <button title="Connect WebREPL"      onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
-            <button title="Connect Bluetooth"    onclick="app.connectDevice('ble')" id="btn-conn-ble"><i class="fa-brands fa-bluetooth-b"></i></button>
+            <span id="conn-advanced-buttons" style="display: none;">
+                <button title="Connect WebREPL"      onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
+                <button title="Connect Bluetooth"    onclick="app.connectDevice('ble')" id="btn-conn-ble"><i class="fa-brands fa-bluetooth-b"></i></button>
+            </span>
             <button title="Connect USB/Serial"   onclick="app.connectDevice('usb')" id="btn-conn-usb"><i class="fa-brands fa-usb"></i></button>
             <button title="API Reference" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
             <button title="Full Screen" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
@@ -153,7 +155,7 @@
             <div id="menu-about" class="tab-content">
                 <a class="github-fork-ribbon left-top" href="https://github.com/Architeuthis-Flux/JumperIDE" target="_blank" data-ribbon="Fork me on GitHub" title="Fork me on GitHub">Fork me on GitHub</a>
                 <div style="text-align: center; padding: 50px 0 0 0;">
-                    <img src="assets/ColorBubbleLogo.png" alt="Logo" width="30%">
+                    <img src="assets/ColorBubbleLogoIDE@0.5x.png" alt="Logo" width="30%">
                     <div style="font-size:1.5em;">JumperIDE</div>
                     <div id='viper-ide-version'></div>
                     <small><div id='viper-ide-build'></div></small>
@@ -174,6 +176,7 @@
                 </div>
             </div>
         </div>
+        <div id="resizer-left" class="sidebar-resizer" title="Resize file panel"></div>
         <div id="main-editor">
             <div class="tabs" id="editor-tabs"></div>
             <div id="terminal-container">
@@ -197,9 +200,11 @@
                 </div>
             </div>
         </div>
+        <div id="resizer-right" class="sidebar-resizer" title="Resize API reference panel"></div>
         <div id="api-ref-panel" class="collapsed">
             <div id="api-ref-header">
-                <label><input type="checkbox" id="api-ref-go-to-hovered"/> Go To Hovered Function</label>
+                <label><input type="checkbox" id="api-ref-go-to-clicked"/> Go To Clicked Function</label>
+                <button title="Docs full width" onclick="app.toggleApiRefFullWidth()" id="btn-api-ref-fullwidth"><i class="fa-solid fa-expand"></i></button>
             </div>
             <iframe id="api-ref-iframe" title="MicroPython API Reference" src="about:blank"></iframe>
         </div>

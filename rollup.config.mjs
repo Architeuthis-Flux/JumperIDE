@@ -8,6 +8,14 @@ import serve from 'rollup-plugin-serve'
 import sourcemaps from 'rollup-plugin-sourcemaps2';
 import fs from 'fs'
 import path from 'path'
+import { execSync } from 'child_process'
+
+// Regenerate API ref headings/symbols from docs before build
+try {
+  execSync('node scripts/generate-api-ref-data.js', { stdio: 'inherit' })
+} catch (_) {
+  // proceed without regenerating if script or API ref md missing
+}
 
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
 

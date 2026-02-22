@@ -28,8 +28,19 @@ body.loaded {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1px 5px;
+    gap: 21px;
+    padding: 1px 11px;
     user-select: none;
+}
+
+#tool-panel > div {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+#tool-panel #btn-api-ref {
+    flex-shrink: 0;
 }
 
 #container {
@@ -37,10 +48,14 @@ body.loaded {
     flex: 1;
     overflow: hidden;
     position: relative;
+    --side-menu-width: 300px;
+    --api-ref-panel-width: 360px;
 }
 
 #side-menu {
-    flex: 0 0 300px;
+    flex: 0 0 var(--side-menu-width);
+    width: var(--side-menu-width);
+    min-width: var(--side-menu-width);
     display: flex;
     flex-direction: column-reverse;
     background-color: var(--bg-color-menu);
@@ -51,7 +66,64 @@ body.loaded {
 }
 
 #side-menu.hidden {
-    margin-left: -300px;
+    margin-left: calc(-1 * var(--side-menu-width));
+}
+
+.sidebar-resizer {
+    flex-shrink: 0;
+    width: 6px;
+    min-width: 6px;
+    cursor: col-resize;
+    background: var(--bg-color);
+    transition: background 0.15s;
+    touch-action: none;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+    background: var(--fg-color-highlight);
+}
+
+.sidebar-resizer.resizing {
+    background: var(--fg-color-highlight);
+}
+
+#container.resizing-sidebar #side-menu,
+#container.resizing-sidebar #api-ref-panel {
+    transition: none;
+}
+
+body.sidebar-resizing {
+    user-select: none;
+    cursor: col-resize;
+}
+
+body.sidebar-resizing * {
+    cursor: col-resize;
+}
+
+/* Full-width API reference: hide side menu and editor, docs fill the window */
+#container.api-ref-fullwidth #side-menu,
+#container.api-ref-fullwidth #resizer-left,
+#container.api-ref-fullwidth #main-editor,
+#container.api-ref-fullwidth #resizer-right {
+    flex: 0 0 0;
+    min-width: 0;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+#container.api-ref-fullwidth #api-ref-panel {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+#container.api-ref-fullwidth #api-ref-panel.collapsed {
+    flex: 1 1 100%;
+    min-width: 0;
+    visibility: visible;
+    pointer-events: auto;
 }
 
 #main-editor {
@@ -63,7 +135,8 @@ body.loaded {
 }
 
 #api-ref-panel {
-    flex: 0 0 360px;
+    flex: 0 0 var(--api-ref-panel-width);
+    min-width: var(--api-ref-panel-width);
     display: flex;
     flex-direction: column;
     background-color: var(--bg-color-menu);
@@ -79,6 +152,9 @@ body.loaded {
 
 #api-ref-header {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 6px 8px;
     font-size: 0.9rem;
 }
@@ -88,6 +164,22 @@ body.loaded {
     align-items: center;
     gap: 6px;
     cursor: pointer;
+}
+
+#api-ref-header #btn-api-ref-fullwidth {
+    margin-left: auto;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: inherit;
+    background: var(--bg-color);
+    border: 1px solid var(--fg-color);
+    color: var(--fg-color);
+    border-radius: 4px;
+}
+
+#api-ref-header #btn-api-ref-fullwidth:hover {
+    background: var(--fg-color-highlight);
+    color: var(--bg-color);
 }
 
 #api-ref-iframe {

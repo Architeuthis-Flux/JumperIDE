@@ -31,6 +31,7 @@ import translations from './translations.json'
 import { parseStackTrace, validatePython, disassembleMPY, minifyPython, prettifyPython } from './python_utils.js'
 import { MicroPythonWASM } from './emulator.js'
 import { getSetting, onSettingChange, updateSetting } from './settings.js'
+import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
@@ -44,7 +45,7 @@ import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
 import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
@@ -52,7 +53,7 @@ library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark)
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -569,9 +570,9 @@ async function _loadContent(fn, content, editorElement) {
             if (update.docChanged) {
                 QS(`#menu-file-tree [data-fn="${fn}"]`).classList.add("changed")
             }
-            if (update.selectionSet && QID('api-ref-go-to-hovered')?.checked && !QID('api-ref-panel')?.classList.contains('collapsed')) {
-                if (apiRefGoToHoveredDebounce) clearTimeout(apiRefGoToHoveredDebounce)
-                apiRefGoToHoveredDebounce = setTimeout(() => syncApiRefToHovered(editor), 250)
+            if (update.selectionSet && QID('api-ref-go-to-clicked')?.checked && !QID('api-ref-panel')?.classList.contains('collapsed')) {
+                if (apiRefGoToClickedDebounce) clearTimeout(apiRefGoToClickedDebounce)
+                apiRefGoToClickedDebounce = setTimeout(() => syncApiRefToClicked(editor), 250)
             }
         })
         addApiRefHoverListener(editor)
@@ -864,84 +865,36 @@ export function autoHideSideMenu() {
 
 const API_REF_BASE_URL = 'https://docs.jumperless.org/09.5-micropythonAPIreference/'
 const API_REF_STORAGE_KEY = 'apiRefPanelOpen'
-const API_REF_GO_TO_HOVERED_KEY = 'apiRefGoToHovered'
-let apiRefGoToHoveredDebounce = null
+const API_REF_GO_TO_CLICKED_KEY = 'apiRefGoToClicked'
+const SIDE_MENU_WIDTH_KEY = 'sideMenuWidth'
+const API_REF_PANEL_WIDTH_KEY = 'apiRefPanelWidth'
+const SIDE_MENU_MIN = 80
+const SIDE_MENU_MAX = 560
+const API_REF_PANEL_MIN = 100
+const API_REF_PANEL_MAX = 960
+let apiRefGoToClickedDebounce = null
 
-// MkDocs-style slug for heading text (lowercase, non-alphanumeric -> hyphen, collapse)
-function mkdocsSlug(text) {
+// Read the Docs / Sphinx slug: remove spaces, remove ()[] and =, replace , with -, lowercase
+function readTheDocsSlug(text) {
     if (!text) return ''
-    return text.toLowerCase()
-        .replace(/_/g, '-')
-        .replace(/[\s(),=[\]]+/g, '-')
+    return text
+        .replace(/\s/g, '')
+        .replace(/[()[\]']/g, '')
+        .replace(/=/g, '')
+        .replace(/,/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
+        .toLowerCase()
 }
 
-// Function headings from 09.5-micropythonAPIreference.md (### `name(params)`); symbol -> exact heading slug
+// Function headings from generated/api_ref_data.js (from 09.5-micropythonAPIreference.md); symbol -> exact heading slug
 let API_REF_FUNCTION_ANCHORS
 try {
     API_REF_FUNCTION_ANCHORS = (() => {
-        const headings = [
-            'connect(node1, node2, [duplicates=-1])',
-            'disconnect(node1, node2)',
-            'fast_disconnect(node1, node2)',
-            'is_connected(node1, node2)',
-            'nodes_clear()',
-            'node(name_or_id)',
-            'nodes_save([slot])',
-            'nodes_discard()',
-            'nodes_has_changes()',
-            'switch_slot(slot)',
-            'get_state()',
-            'set_state(json, [clear_first=True])',
-            'get_net_name(netNum)',
-            'set_net_name(netNum, name)',
-            'get_net_color(netNum)',
-            'get_net_color_name(netNum)',
-            'set_net_color(netNum, color, [r], [g], [b])',
-            'set_net_color_hsv(netNum, h, [s], [v])',
-            'get_num_nets()',
-            'get_num_bridges()',
-            'get_net_nodes(netNum)',
-            'get_bridge(bridgeIdx)',
-            'get_net_info(netNum)',
-            'get_num_paths([include_duplicates=True])',
-            'get_path_info(path_idx)',
-            'get_all_paths()',
-            'get_path_between(node1, node2)',
-            'dac_set(channel, voltage, [save=True])',
-            'dac_get(channel)',
-            'adc_get(channel)',
-            'overlay_set(name, x, y, height, width, colors)',
-            'overlay_clear(name)',
-            'overlay_clear_all()',
-            'overlay_shift(name, dx, dy)',
-            'overlay_place(name, x, y)',
-            'overlay_set_pixel(x, y, color)',
-            'overlay_serialize()',
-            'gpio_set(pin, value)',
-            'gpio_get(pin)',
-            'gpio_set_dir(pin, direction)',
-            'gpio_get_dir(pin)',
-            'gpio_set_pull(pin, pull)',
-            'gpio_get_pull(pin)',
-            'gpio_set_read_floating(pin, enabled)',
-            'gpio_get_read_floating(pin)',
-            'pwm(pin, [frequency], [duty_cycle])',
-            'pwm_set_duty_cycle(pin, duty_cycle)',
-            'pwm_set_frequency(pin, frequency)',
-            'pwm_stop(pin)',
-            'ina_get_current(sensor)',
-            'ina_get_voltage(sensor)',
-            'ina_get_bus_voltage(sensor)',
-            'ina_get_power(sensor)',
-            'probe_read([blocking=True])',
-            'probe_button([blocking=True], [consume=False])',
-        ]
         const map = {}
-        for (const h of headings) {
+        for (const h of API_REF_HEADINGS) {
             const symbol = h.split('(')[0].trim().toLowerCase().replace(/-/g, '_')
-            map[symbol] = mkdocsSlug(h)
+            map[symbol] = readTheDocsSlug(h)
         }
         return map
     })()
@@ -970,10 +923,10 @@ function getWordAtPosition(editor, pos) {
     return doc.slice(start, end)
 }
 
-function syncApiRefToHovered(editor, posOverride) {
+function syncApiRefToClicked(editor, posOverride) {
     const panel = QID('api-ref-panel')
-    const goToHoveredEl = QID('api-ref-go-to-hovered')
-    if (!panel || panel.classList.contains('collapsed') || !goToHoveredEl?.checked || !editor) return
+    const goToClickedEl = QID('api-ref-go-to-clicked')
+    if (!panel || panel.classList.contains('collapsed') || !goToClickedEl?.checked || !editor) return
     const pos = posOverride !== undefined ? posOverride : editor.state.selection.main.head
     const word = getWordAtPosition(editor, pos)
     if (!word) return
@@ -988,11 +941,11 @@ let apiRefHoverDebounce = null
 function addApiRefHoverListener(editor) {
     if (!editor?.contentDOM) return
     editor.contentDOM.addEventListener('mousemove', (e) => {
-        if (!QID('api-ref-go-to-hovered')?.checked || QID('api-ref-panel')?.classList.contains('collapsed')) return
+        if (!QID('api-ref-go-to-clicked')?.checked || QID('api-ref-panel')?.classList.contains('collapsed')) return
         if (apiRefHoverDebounce) clearTimeout(apiRefHoverDebounce)
         apiRefHoverDebounce = setTimeout(() => {
             const result = editor.posAtCoords({ x: e.clientX, y: e.clientY })
-            if (result != null) syncApiRefToHovered(editor, result.pos)
+            if (result != null) syncApiRefToClicked(editor, result.pos)
         }, 200)
     })
 }
@@ -1009,6 +962,29 @@ export function toggleApiRefPanel() {
     if (isOpen) {
         if (iframe.src === 'about:blank' || !iframe.src) iframe.src = API_REF_BASE_URL
     }
+}
+
+export function toggleApiRefFullWidth() {
+    const container = QID('container')
+    const panel = QID('api-ref-panel')
+    const iframe = QID('api-ref-iframe')
+    const btn = QID('btn-api-ref-fullwidth')
+    if (!container || !panel || !iframe) return
+    if (panel.classList.contains('collapsed')) {
+        panel.classList.remove('collapsed')
+        try { localStorage.setItem(API_REF_STORAGE_KEY, '1') } catch (_) {}
+        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = API_REF_BASE_URL
+    }
+    container.classList.toggle('api-ref-fullwidth')
+    updateApiRefFullWidthButton(container, btn)
+}
+
+function updateApiRefFullWidthButton(container, btn) {
+    if (!btn) return
+    const isFull = container && container.classList.contains('api-ref-fullwidth')
+    btn.title = isFull ? 'Exit full width docs' : 'Docs full width'
+    btn.innerHTML = isFull ? '<i class="fa-solid fa-compress"></i>' : '<i class="fa-solid fa-expand"></i>'
+    if (typeof dom !== 'undefined' && dom.watch) dom.watch()
 }
 
 function hexViewer(arrayBuffer, targetElement) {
@@ -1110,8 +1086,8 @@ export function applyTranslation() {
         }
         QID('btn-save').setAttribute('title',     T('tool.save') + ` [${metaKey}+S]`)
         QID('btn-run').setAttribute('title',      T('tool.run') + ' [F5]')
-        QID('btn-conn-ws').setAttribute('title',  T('tool.conn.ws'))
-        QID('btn-conn-ble').setAttribute('title', T('tool.conn.ble'))
+        QID('btn-conn-ws')?.setAttribute('title',  T('tool.conn.ws'))
+        QID('btn-conn-ble')?.setAttribute('title', T('tool.conn.ble'))
         QID('btn-conn-usb').setAttribute('title', T('tool.conn.usb'))
         QID('term-clear').setAttribute('title',   T('tool.clear'))
         QID('tab-term').innerText = T('tool.terminal')
@@ -1264,15 +1240,26 @@ export function applyTranslation() {
         term.options.fontSize = (size * 0.9).toFixed(1)
     })
 
+    function updateAdvancedConnButtonsVisibility() {
+        const el = QID('conn-advanced-buttons')
+        if (el) el.style.display = getSetting('advanced-mode') ? '' : 'none'
+    }
+    onSettingChange('advanced-mode', updateAdvancedConnButtonsVisibility)
+    updateAdvancedConnButtonsVisibility()
+
     applyTranslation()
 
 
     setupTabs(QID('side-menu'))
     setupTabs(QID('terminal-container'))
 
+    applySidebarWidths()
+    setupSidebarResizers()
+    updateApiRefFullWidthButton(QID('container'), QID('btn-api-ref-fullwidth'))
+
     const apiRefPanel = QID('api-ref-panel')
     const apiRefIframe = QID('api-ref-iframe')
-    const apiRefGoToHoveredCheckbox = QID('api-ref-go-to-hovered')
+    const apiRefGoToClickedCheckbox = QID('api-ref-go-to-clicked')
     if (apiRefPanel) {
         try {
             if (localStorage.getItem(API_REF_STORAGE_KEY) === '1') {
@@ -1282,13 +1269,13 @@ export function applyTranslation() {
                 apiRefPanel.classList.add('collapsed')
             }
         } catch (_) {}
-        if (apiRefGoToHoveredCheckbox) {
+        if (apiRefGoToClickedCheckbox) {
             try {
-            apiRefGoToHoveredCheckbox.checked = localStorage.getItem(API_REF_GO_TO_HOVERED_KEY) === '1'
+            apiRefGoToClickedCheckbox.checked = localStorage.getItem(API_REF_GO_TO_CLICKED_KEY) !== '0'
             } catch (_) {}
-            apiRefGoToHoveredCheckbox.addEventListener('change', () => {
+            apiRefGoToClickedCheckbox.addEventListener('change', () => {
                 try {
-                    localStorage.setItem(API_REF_GO_TO_HOVERED_KEY, apiRefGoToHoveredCheckbox.checked ? '1' : '0')
+                    localStorage.setItem(API_REF_GO_TO_CLICKED_KEY, apiRefGoToClickedCheckbox.checked ? '1' : '0')
                 } catch (_) {}
             })
         }
@@ -1298,13 +1285,28 @@ export function applyTranslation() {
 
     const fn = 'README.md'
     const content = `
-# ViperIDE - MicroPython Web IDE
-Read more: https://github.com/vshymanskyy/ViperIDE
+# Jumper IDE - MicroPython Web IDE
 
-Connect your device and start creating! 🤖👨‍💻🕹️
+Connect your Jumperless board and start coding!
 
-You can also open a virtual device and explore some examples:
-https://viper-ide.org?vm=1
+## Connect
+- Click **USB/Serial** (or WebREPL/Bluetooth in **Advanced mode** under Settings).
+ 
+- **Choose the 3rd Jumperless Serial port** in the list. On Windows ports may not be in order—if nothing happens, try the other Jumperless ports.
+ 
+- After connecting, open a file and hit **Run** (F5); press again to **Stop**. Save with **Ctrl+S** (Cmd+S on Mac); give it a second and stop the script first if it's running.
+ 
+
+## Tips
+ 
+- **Run:** **F5** or the Run button. **Stop:** press again.
+ 
+- **Save:** **Ctrl+S** / **Cmd+S** saves the current file to the board.
+- **API Reference:** Book icon opens the MicroPython API docs; enable "Go To Clicked Function" to jump to the symbol under the cursor.
+- **Docs full width:** Expand button in the API Reference panel header fills the window with docs.
+- **Advanced mode:** In Settings (sidebar) for WebREPL and Bluetooth.
+- **More:** See the Jumperless MicroPython docs for hardware functions, REPL, and \`jumperless.py\` / \`jumperless.pyi\` stubs for your editor.
+
 `
     await _loadContent(fn, content, createTab(fn))
 
@@ -1534,4 +1536,82 @@ function stopDrag() {
     document.documentElement.removeEventListener('touchmove', doDrag, false)
     document.documentElement.removeEventListener('mouseup', stopDrag, false)
     document.documentElement.removeEventListener('touchend', stopDrag, false)
+}
+
+/*
+ * Sidebar resizers (left = file panel, right = API ref panel)
+ */
+
+function applySidebarWidths() {
+    const container = QID('container')
+    if (!container) return
+    try {
+        const left = localStorage.getItem(SIDE_MENU_WIDTH_KEY)
+        if (left != null) {
+            const px = Math.max(SIDE_MENU_MIN, Math.min(SIDE_MENU_MAX, parseInt(left, 10)))
+            container.style.setProperty('--side-menu-width', px + 'px')
+        }
+        const right = localStorage.getItem(API_REF_PANEL_WIDTH_KEY)
+        if (right != null) {
+            const px = Math.max(API_REF_PANEL_MIN, Math.min(API_REF_PANEL_MAX, parseInt(right, 10)))
+            container.style.setProperty('--api-ref-panel-width', px + 'px')
+        }
+    } catch (_) {}
+}
+
+function setupSidebarResizers() {
+    const container = QID('container')
+    const sideMenu = QID('side-menu')
+    const apiRefPanel = QID('api-ref-panel')
+    const resizerLeft = QID('resizer-left')
+    const resizerRight = QID('resizer-right')
+    if (!container || !resizerLeft || !resizerRight || !sideMenu || !apiRefPanel) return
+
+    function startResize(side, e) {
+        e.preventDefault()
+        const startX = e.clientX
+        const isLeft = side === 'left'
+        const panelEl = isLeft ? sideMenu : apiRefPanel
+        const varName = isLeft ? '--side-menu-width' : '--api-ref-panel-width'
+        const min = isLeft ? SIDE_MENU_MIN : API_REF_PANEL_MIN
+        const max = isLeft ? SIDE_MENU_MAX : API_REF_PANEL_MAX
+        const storageKey = isLeft ? SIDE_MENU_WIDTH_KEY : API_REF_PANEL_WIDTH_KEY
+        const grip = isLeft ? resizerLeft : resizerRight
+        let startWidth = panelEl.getBoundingClientRect().width
+        if (startWidth < min) startWidth = min
+        if (startWidth > max) startWidth = max
+        grip.classList.add('resizing')
+        container.classList.add('resizing-sidebar')
+        document.body.classList.add('sidebar-resizing')
+        grip.setPointerCapture(e.pointerId)
+
+        function move(ev) {
+            ev.preventDefault()
+            const delta = ev.clientX - startX
+            const newWidth = Math.round(Math.max(min, Math.min(max, isLeft ? startWidth + delta : startWidth - delta)))
+            container.style.setProperty(varName, newWidth + 'px')
+        }
+
+        function stop(ev) {
+            try { grip.releasePointerCapture(ev.pointerId) } catch (_) {}
+            grip.classList.remove('resizing')
+            container.classList.remove('resizing-sidebar')
+            document.body.classList.remove('sidebar-resizing')
+            const val = getComputedStyle(container).getPropertyValue(varName).trim()
+            const px = parseInt(val, 10)
+            if (!isNaN(px)) {
+                try { localStorage.setItem(storageKey, String(px)) } catch (_) {}
+            }
+            grip.removeEventListener('pointermove', move)
+            grip.removeEventListener('pointerup', stop)
+            grip.removeEventListener('pointercancel', stop)
+        }
+
+        grip.addEventListener('pointermove', move, false)
+        grip.addEventListener('pointerup', stop, false)
+        grip.addEventListener('pointercancel', stop, false)
+    }
+
+    resizerLeft.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button === 0) startResize('left', e) }, false)
+    resizerRight.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button === 0) startResize('right', e) }, false)
 }

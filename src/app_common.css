@@ -143,11 +143,11 @@ button.connected {
 .fa-circle-play { color: #3b88c3; }
 .fa-circle-stop { color: #ff7272; }
 .logo-img { height: 30px; width: auto; vertical-align: middle; }
-.btn-run-img { width: 20px; height: 20px; display: block; }
+.btn-run-img { width: 23px; height: 23px; vertical-align: middle; }
 .fa-circle-info { color: #3b88c3; }
 .fa-file { color: #3b88c3; }
 .fa-file-circle-exclamation { color: #ed4337; }
-.fa-folder { color: #ffcc4d; }
+.fa-folder { color: #fcff4d; }
 .fa-certificate { color: #ba0311; }
 .fa-cube { color: #ba9066; }
 .fa-cubes { color: #ba9066; }
@@ -155,7 +155,7 @@ button.connected {
 .fa-tools { color: #ccd6dd; }
 /*.fa-arrows-rotate { color: #3b88c3; }*/
 .fa-sliders { color: #ccd6dd }
-.fa-trash-can { color: #ccd6dd }
+.fa-trash-can { color: #ccdde8 }
 .fa-star { color: #ffcc4d; }
 
 .highlight {

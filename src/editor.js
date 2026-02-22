@@ -18,6 +18,7 @@ import { simpleMode } from '@codemirror/legacy-modes/mode/simple-mode'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { monokaiInit } from '@uiw/codemirror-theme-monokai'
 import { tags } from '@lezer/highlight'
+import { API_REF_SYMBOLS } from './generated/api_ref_data.js'
 import { linter } from '@codemirror/lint'
 
 import { validatePython, getRuffWorkspace } from './python_utils.js'
@@ -127,63 +128,10 @@ const specialCommentExtensions = [
 ];
 
 /*
- * Jumperless Python: highlight jumperless module functions and constants
- * (module is imported globally on device, so these names are always available)
+ * Jumperless Python: highlight jumperless module functions (from API ref) and constants
+ * Functions auto-generated from 09.5-micropythonAPIreference.md on build.
  */
-const JUMPERLESS_FUNCTIONS = new Set([
-  "dac_set", "dac_get", "set_dac", "get_dac",
-  "adc_get", "get_adc",
-  "ina_get_current", "ina_get_voltage", "ina_get_bus_voltage", "ina_get_power",
-  "get_ina_current", "get_ina_voltage", "get_ina_bus_voltage", "get_ina_power",
-  "get_current", "get_voltage", "get_bus_voltage", "get_power",
-  "gpio_set", "gpio_get", "gpio_set_dir", "gpio_get_dir", "gpio_set_pull", "gpio_get_pull",
-  "set_gpio", "get_gpio", "set_gpio_dir", "get_gpio_dir", "set_gpio_pull", "get_gpio_pull",
-  "gpio_set_read_floating", "gpio_get_read_floating", "set_gpio_read_floating", "get_gpio_read_floating",
-  "gpio_claim_pin", "gpio_release_pin", "gpio_release_all_pins",
-  "connect", "disconnect", "fast_connect", "fast_disconnect", "is_connected", "nodes_clear", "node",
-  "nodes_save", "nodes_discard", "nodes_has_changes", "switch_slot",
-  "get_net_name", "set_net_name", "get_net_color", "get_net_color_name", "set_net_color", "set_net_color_hsv",
-  "get_num_nets", "get_num_bridges", "get_net_nodes", "get_bridge", "get_net_info", "get_all_nets",
-  "net_name", "net_color", "net_info",
-  "get_num_paths", "get_path_info", "get_all_paths", "get_path_between",
-  "get_state", "set_state",
-  "oled_print", "oled_clear", "oled_connect", "oled_disconnect", "oled_show",
-  "oled_set_text_size", "oled_get_text_size", "oled_copy_print",
-  "oled_get_fonts", "oled_set_font", "oled_get_current_font",
-  "oled_load_bitmap", "oled_display_bitmap", "oled_show_bitmap_file",
-  "oled_get_framebuffer", "oled_set_framebuffer", "oled_get_framebuffer_size",
-  "oled_set_pixel", "oled_get_pixel",
-  "clickwheel_up", "clickwheel_down", "clickwheel_press",
-  "clickwheel_get_position", "clickwheel_reset_position", "clickwheel_get_direction",
-  "clickwheel_get_button", "clickwheel_is_initialized",
-  "print_bridges", "print_paths", "print_crossbars", "print_nets", "print_chip_status",
-  "probe_read", "read_probe", "probe_read_blocking", "probe_read_nonblocking",
-  "get_button", "probe_button", "probe_button_blocking", "probe_button_nonblocking",
-  "probe_wait", "wait_probe", "probe_touch", "wait_touch", "button_read", "read_button",
-  "check_button", "button_check",
-  "get_switch_position", "set_switch_position", "check_switch_position", "probe_tap",
-  "arduino_reset", "run_app", "pause_core2", "send_raw",
-  "context_toggle", "context_get", "change_terminal_color", "cycle_term_color",
-  "force_service", "force_service_by_index", "get_service_index",
-  "nodes_help", "help",
-  "pwm", "pwm_set_duty_cycle", "pwm_set_frequency", "pwm_stop",
-  "set_pwm", "set_pwm_duty_cycle", "set_pwm_frequency", "stop_pwm",
-  "wavegen_set_output", "set_wavegen_output", "wavegen_set_freq", "set_wavegen_freq",
-  "wavegen_set_wave", "set_wavegen_wave", "wavegen_set_sweep", "set_wavegen_sweep",
-  "wavegen_set_amplitude", "set_wavegen_amplitude", "wavegen_set_offset", "set_wavegen_offset",
-  "wavegen_start", "start_wavegen", "wavegen_stop", "stop_wavegen",
-  "wavegen_get_output", "get_wavegen_output", "wavegen_get_freq", "get_wavegen_freq",
-  "wavegen_get_wave", "get_wavegen_wave", "wavegen_get_amplitude", "get_wavegen_amplitude",
-  "wavegen_get_offset", "get_wavegen_offset", "wavegen_is_running",
-  "la_set_trigger", "la_capture_single_sample", "la_start_continuous_capture",
-  "la_stop_capture", "la_is_capturing", "la_set_sample_rate", "la_set_num_samples",
-  "la_enable_channel", "la_set_control_analog", "la_set_control_digital",
-  "la_get_control_analog", "la_get_control_digital",
-  "overlay_set", "overlay_clear", "overlay_clear_all", "overlay_set_pixel",
-  "overlay_count", "overlay_shift", "overlay_place", "overlay_serialize",
-  "FakeGpioPin", "FakeGpioDisconnect",
-  "fs_exists", "fs_listdir", "fs_read", "fs_write", "fs_cwd",
-]);
+const JUMPERLESS_FUNCTIONS = new Set(API_REF_SYMBOLS)
 
 const JUMPERLESS_CONSTANTS = new Set([
   "TOP_RAIL", "T_RAIL", "BOTTOM_RAIL", "BOT_RAIL", "B_RAIL", "GND",

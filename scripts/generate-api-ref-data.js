@@ -1,0 +1,201 @@
+#!/usr/bin/env node
+/**
+ * Extracts API reference function headings and full symbol list from:
+ * 1) MicroPython API reference markdown (### `name(params)`)
+ * 2) C source of truth: modjumperless.c jumperless_module_globals_table + module_stubs.c
+ * 3) jumperless_module.py re-exports (functions + aliases)
+ * Generates: src/generated/api_ref_data.js (headings array + symbol list for app.js and editor.js)
+ *
+ * Usage: node scripts/generate-api-ref-data.js [path-to-09.5-micropythonAPIreference.md]
+ * Default API ref: ../../Jumperless-docs/docs/09.5-micropythonAPIreference.md
+ * Set API_REF_MD, JUMPERLESS_MOD_C, JUMPERLESS_MODULE_PY for custom paths.
+ */
+
+const fs = require('fs')
+const path = require('path')
+
+const defaultMdPath = path.join(__dirname, '..', '..', 'Jumperless-docs', 'docs', '09.5-micropythonAPIreference.md')
+const mdPath = process.env.API_REF_MD || process.argv[2] || defaultMdPath
+const outDir = path.join(__dirname, '..', 'src', 'generated')
+const outFile = path.join(outDir, 'api_ref_data.js')
+
+const base = path.join(__dirname, '..')
+const parent = path.join(__dirname, '..', '..')
+
+function modCCandidates() {
+  const env = (process.env.JUMPERLESS_MOD_C || '').trim()
+  if (env) return [env]
+  return [
+    path.join(parent, 'JumperlOS', 'modules', 'jumperless', 'modjumperless.c'),
+    path.join(base, 'JumperlOS', 'modules', 'jumperless', 'modjumperless.c')
+  ]
+}
+
+function stubsPath() {
+  for (const p of modCCandidates()) {
+    if (fs.existsSync(p)) {
+      const stubs = path.join(path.dirname(p), 'module_stubs.c')
+      if (fs.existsSync(stubs)) return stubs
+      return null
+    }
+  }
+  return null
+}
+
+function modulePyCandidates() {
+  const env = (process.env.JUMPERLESS_MODULE_PY || '').trim()
+  if (env) return [env]
+  return [
+    path.join(parent, 'JumperlOS', 'scripts', 'jumperless_module.py'),
+    path.join(base, 'JumperlOS', 'scripts', 'jumperless_module.py'),
+    path.join(base, 'jumperless_module.py')
+  ]
+}
+
+function resolveModC() {
+  for (const p of modCCandidates()) {
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+function resolveModulePy() {
+  for (const p of modulePyCandidates()) {
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+// Match both ### and #### function headings (sub-sections like OLED use ####)
+const headingRe = /^#{3,4} `([^`]+)`\s*$/gm
+const nativeRe = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*_native\./gm
+const cQstrPtrRe = /MP_QSTR_([a-zA-Z0-9_]+).*?MP_ROM_PTR/g
+const stubsQstrRe = /MP_QSTR_([a-zA-Z0-9_]+)/g
+
+function isFunctionLike(name) {
+  if (name.startsWith('__') && name.endsWith('__')) return false
+  if (name.replace(/_/g, '').toUpperCase() === name.replace(/_/g, '')) return false
+  return true
+}
+
+function extractHeadings(content) {
+  const headings = []
+  let m
+  const re = new RegExp(headingRe.source, 'gm')
+  while ((m = re.exec(content)) !== null) headings.push(m[1])
+  return headings
+}
+
+function symbolFromHeading(h) {
+  const name = h.split('(')[0].trim()
+  return name.toLowerCase().replace(/-/g, '_')
+}
+
+function extractNamesFromC(content) {
+  const startMarker = 'jumperless_module_globals_table[] = {'
+  const endMarker = '\n};\n\nstatic MP_DEFINE_CONST_DICT'
+  const start = content.indexOf(startMarker)
+  if (start === -1) return []
+  const blockStart = start + startMarker.length
+  const end = content.indexOf(endMarker, blockStart)
+  if (end === -1) return []
+  const tableBlock = content.slice(blockStart, end)
+  const names = []
+  for (const line of tableBlock.split('\n')) {
+    if (!line.includes('MP_ROM_PTR')) continue
+    let m
+    const re = new RegExp(cQstrPtrRe.source, 'g')
+    while ((m = re.exec(line)) !== null) {
+      if (isFunctionLike(m[1])) names.push(m[1])
+    }
+  }
+  return names
+}
+
+function extractNamesFromStubs(content) {
+  const start = content.indexOf('_jl_forced_qstrs[] = {')
+  if (start === -1) return []
+  const block = content.slice(start, start + 1024)
+  const names = []
+  let m
+  const re = new RegExp(stubsQstrRe.source, 'g')
+  while ((m = re.exec(block)) !== null) {
+    if (isFunctionLike(m[1])) names.push(m[1])
+  }
+  return names
+}
+
+function extractNamesFromModule(content) {
+  const names = []
+  let m
+  const re = new RegExp(nativeRe.source, 'gm')
+  while ((m = re.exec(content)) !== null) {
+    const name = m[1]
+    if (name.startsWith('_')) continue
+    if (name.replace(/_/g, '').toUpperCase() === name.replace(/_/g, '')) continue
+    names.push(name)
+  }
+  return names
+}
+
+function main() {
+  let mdContent = ''
+  try {
+    mdContent = fs.readFileSync(mdPath, 'utf8')
+  } catch (err) {
+    if (process.env.CI !== 'true') {
+      console.warn('[generate-api-ref-data] Could not read API ref:', mdPath, err.message)
+    }
+  }
+
+  const headings = mdContent ? extractHeadings(mdContent) : []
+  const symbolSet = new Set(headings.map(symbolFromHeading))
+
+  const modC = resolveModC()
+  if (modC) {
+    try {
+      const cContent = fs.readFileSync(modC, 'utf8')
+      extractNamesFromC(cContent).forEach(s => symbolSet.add(s))
+    } catch (e) {
+      if (process.env.CI !== 'true') console.warn('[generate-api-ref-data] Could not read modjumperless.c:', e.message)
+    }
+  }
+
+  const stubs = stubsPath()
+  if (stubs) {
+    try {
+      const stubsContent = fs.readFileSync(stubs, 'utf8')
+      extractNamesFromStubs(stubsContent).forEach(s => symbolSet.add(s))
+    } catch (e) {
+      if (process.env.CI !== 'true') console.warn('[generate-api-ref-data] Could not read module_stubs.c:', e.message)
+    }
+  }
+
+  const modulePy = resolveModulePy()
+  if (modulePy) {
+    try {
+      const pyContent = fs.readFileSync(modulePy, 'utf8')
+      extractNamesFromModule(pyContent).forEach(s => symbolSet.add(s))
+    } catch (e) {
+      if (process.env.CI !== 'true') console.warn('[generate-api-ref-data] Could not read jumperless_module.py:', e.message)
+    }
+  }
+
+  const symbols = [...symbolSet].sort()
+
+  fs.mkdirSync(outDir, { recursive: true })
+  const js = `/**
+ * Auto-generated. Do not edit.
+ * Run: node scripts/generate-api-ref-data.js
+ * Sources: API ref markdown, modjumperless.c, module_stubs.c, jumperless_module.py
+ */
+
+export const API_REF_HEADINGS = ${JSON.stringify(headings, null, 2)}
+
+export const API_REF_SYMBOLS = ${JSON.stringify(symbols, null, 2)}
+`
+  fs.writeFileSync(outFile, js, 'utf8')
+  console.log('[generate-api-ref-data] Wrote', outFile, '|', headings.length, 'headings,', symbols.length, 'symbols')
+}
+
+main()
