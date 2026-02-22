@@ -1018,6 +1018,8 @@ try {
     API_REF_FUNCTION_ANCHORS = Object.create(null)
 }
 
+const API_REF_DEBUG = typeof localStorage !== 'undefined' && localStorage.getItem('apiRefDebug') === '1'
+
 function symbolToAnchor(symbol) {
     try {
         if (symbol == null || typeof symbol !== 'string') return ''
@@ -1046,7 +1048,9 @@ function syncApiRefToClicked(editor, posOverride) {
     const pos = posOverride !== undefined ? posOverride : editor.state.selection.main.head
     const word = getWordAtPosition(editor, pos)
     if (!word) return
-    const anchor = symbolToAnchor(word)
+    const lower = word.toLowerCase().replace(/-/g, '_')
+    const fromMap = API_REF_FUNCTION_ANCHORS && API_REF_FUNCTION_ANCHORS[lower]
+    const anchor = fromMap !== undefined ? fromMap : symbolToAnchor(word)
     const iframe = QID('api-ref-iframe')
     if (!iframe || !anchor) return
     const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
@@ -1057,7 +1061,16 @@ function syncApiRefToClicked(editor, posOverride) {
         const u = new URL(iframe.src || '')
         currentHash = u.hash ? decodeURIComponent(u.hash.slice(1)) : ''
     } catch (_) {}
+    if (API_REF_DEBUG) {
+        console.log('[API Ref] word:', word, '| symbolKey:', lower, '| anchor:', anchor, '| fromMap:', !!fromMap, '| base:', base, '| newSrc:', newSrc)
+    }
     if (currentBase === base && currentHash === anchor) return
+    const onLoad = () => {
+        iframe.removeEventListener('load', onLoad)
+        if (API_REF_DEBUG) console.log('[API Ref] iframe load: re-applying hash', anchor)
+        iframe.src = base + '#' + anchor
+    }
+    iframe.addEventListener('load', onLoad, { once: true })
     iframe.src = newSrc
 }
 
@@ -1338,12 +1351,12 @@ export function applyTranslation() {
         if (typeof window.analytics.track === 'undefined') {
             throw new Error()
         }
-        // Skip external geo on localhost to avoid CORS errors
         const isLocalhost = /^localhost$|^127\.\d+\.\d+\.\d+$/.test(window.location.hostname)
+        if (isLocalhost) {
+            window.analytics = { track: function () {}, identify: function () {} }
+        } else {
         const ua = new UAParser()
-        const geo = isLocalhost
-            ? { latitude: 0, longitude: 0, continent: '', countryName: '', regionName: '', cityName: '' }
-            : await fetchJSON('https://freeipapi.com/api/json')
+        const geo = await fetchJSON('https://freeipapi.com/api/json')
         const scr = getScreenInfo()
 
         let tz
@@ -1352,10 +1365,6 @@ export function applyTranslation() {
         } catch (_e) {
             tz = (new Date()).getTimezoneOffset()
         }
-
-        //console.log(geo)
-        //console.log(ua.getResult())
-        //console.log(scr)
 
         const userUID = getUserUID()
 
@@ -1396,6 +1405,7 @@ export function applyTranslation() {
         idleMonitor.setActiveCallback(() => {
             analytics.track('User Active')
         })
+        }
 
     } catch (_err) {
         window.analytics = {
