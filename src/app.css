@@ -43,13 +43,17 @@ body.loaded {
     flex-shrink: 0;
 }
 
+body.api-ref-open #tool-panel #btn-api-ref {
+    color: var(--fg-color-highlight);
+}
+
 #container {
     display: flex;
     flex: 1;
     overflow: hidden;
     position: relative;
     --side-menu-width: 300px;
-    --api-ref-panel-width: 360px;
+    --api-ref-panel-width: 520px;
 }
 
 #side-menu {
@@ -541,11 +545,21 @@ body.sidebar-resizing * {
 
 #menu-file-title, #menu-pkg-title, #menu-scripts-title, #menu-settings-title, #menu-tools-title {
     font-weight: bold;
+    /* font-family:'Gill Sans', sans-serif; */
+    font-size: medium;
+    background: linear-gradient(to bottom, #d9ff00,#d9ff00,#ffcc00, #ff0073, #ff0090);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(-0.4px -0.4px 0 #000) drop-shadow(0.4px -0.4px 0 #000) drop-shadow(-0.4px 0.4px 0 #000) drop-shadow(0.4px 0.4px 0 #000)
+            drop-shadow(0 -0.4px 0 #000) drop-shadow(0 0.4px 0 #000) drop-shadow(-0.4px 0 0 #000) drop-shadow(0.4px 0 0 #000);
+    margin: 0px 0 10px 0;
 }
 
 #menu-file-tree div, #menu-pkg-list div, #menu-scripts-list div, #menu-settings-list div, #menu-tools-list div {
     margin: 5px 0;
     line-height: 1.2em;
+    
 }
 
 #menu-file-tree div .name {
@@ -569,6 +583,38 @@ body.sidebar-resizing * {
 #menu-file-tree div .changed::after {
     content: "●";
     color: var(--fg-color-highlight);
+}
+
+/* Scripts from docs: smaller text, pink icons, descriptions on hover */
+#menu-scripts-list {
+    font-size: 0.875rem;
+}
+
+#menu-scripts-list .menu-script-row {
+    cursor: pointer;
+}
+
+#menu-scripts-list .menu-script-icon,
+#menu-scripts-list .menu-script-icon::before {
+    color: #ec48c6 !important;
+}
+
+#menu-scripts-list .menu-script-desc {
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin: 6px 6px 6px 6px;
+    padding-left: 1.2em;
+    color: var(--fg-color);
+    transition: opacity 0.15s ease, max-height 0.2s ease;
+}
+
+#menu-scripts-list .menu-script-row:hover + .menu-script-desc {
+    opacity: 0.8;
+    max-height: 10em;
+    margin: 15px 4px 15px 4px;
 }
 
 .menu-action {

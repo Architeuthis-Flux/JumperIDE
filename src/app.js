@@ -32,6 +32,7 @@ import { parseStackTrace, validatePython, disassembleMPY, minifyPython, prettify
 import { MicroPythonWASM } from './emulator.js'
 import { getSetting, onSettingChange, updateSetting, getCustomDocSites, setCustomDocSites, getSelectedDocIndex, setSelectedDocIndex } from './settings.js'
 import { API_REF_HEADINGS } from './generated/api_ref_data.js'
+import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROPYTHON } from './apiRefMicroPython.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
@@ -819,16 +820,18 @@ export async function loadScriptIndex() {
             const safeName = name.replace(/"/g, '&quot;').replace(/</g, '&lt;')
             const safeDesc = desc.replace(/"/g, '&quot;').replace(/</g, '&lt;')
             const safeUrl = url.replace(/"/g, '&quot;')
-            listEl.insertAdjacentHTML('beforeend', `<div>
-                <span><i class="fa-solid fa-file-code fa-fw"></i> ${safeName}</span>
-                <a href="#" class="menu-action" title="Open in editor" data-script-url="${safeUrl}" data-script-name="${safeName}"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
+            listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-row" data-script-url="${safeUrl}" data-script-name="${safeName}">
+                <span><i class="fa-solid fa-file-code fa-fw menu-script-icon"></i> ${safeName}</span>
+                <a href="#" class="menu-action" title="Open in editor"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
             </div>`)
             if (safeDesc) listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-desc">${safeDesc}</div>`)
         }
-        listEl.querySelectorAll('a[data-script-url]').forEach(a => {
-            a.addEventListener('click', (e) => {
+        listEl.querySelectorAll('.menu-script-row').forEach(row => {
+            row.addEventListener('click', (e) => {
                 e.preventDefault()
-                openScriptFromUrl(a.getAttribute('data-script-url'), a.getAttribute('data-script-name'))
+                const url = row.getAttribute('data-script-url')
+                const name = row.getAttribute('data-script-name')
+                if (url) openScriptFromUrl(url, name)
             })
         })
     } catch (err) {
@@ -964,6 +967,16 @@ function getCurrentDocUrl() {
     return sites[idx]?.url || sites[0]?.url || 'about:blank'
 }
 
+/** Find first doc site index whose URL contains the given origin. Returns -1 if none. */
+function getDocSiteIndexByOrigin(origin) {
+    const sites = getCustomDocSites()
+    for (let i = 0; i < sites.length; i++) {
+        const u = sites[i]?.url || ''
+        if (u.includes(origin)) return i
+    }
+    return -1
+}
+
 function refreshApiRefDocPicker() {
     const picker = QID('api-ref-doc-picker')
     const link = QID('api-ref-docs-link')
@@ -994,63 +1007,11 @@ let apiRefPendingScrollAnchor = null
 let apiRefPendingSearchText = null
 let apiRefLastScrollKey = ''
 let apiRefLastScrollTime = 0
-const API_REF_SCROLL_COOLDOWN_MS = 2500
+const API_REF_SCROLL_COOLDOWN_MS = 250
 
 const API_REF_OUR_DOCS_ORIGIN = 'https://docs.jumperless.org'
 const API_REF_MICROPYTHON_ORIGIN = 'https://docs.micropython.org'
 const API_REF_MICROPYTHON_LIBRARY_PATH = '/en/latest/library/'
-
-// MicroPython docs: module.html#module.symbol or #slug (e.g. time.html#time.sleep, neopixel.html#neopixel.NeoPixel.fill).
-// Map: editor word (lower/snake) -> { module, anchor }; anchor optional (module page only if omitted).
-const API_REF_MICROPYTHON_SYMBOLS = Object.freeze({
-    // time
-    sleep: { module: 'time', anchor: 'time.sleep' },
-    sleep_ms: { module: 'time', anchor: 'time.sleep_ms' },
-    sleep_us: { module: 'time', anchor: 'time.sleep_us' },
-    ticks_ms: { module: 'time', anchor: 'time.ticks_ms' },
-    ticks_us: { module: 'time', anchor: 'time.ticks_us' },
-    ticks_cpu: { module: 'time', anchor: 'time.ticks_cpu' },
-    ticks_add: { module: 'time', anchor: 'time.ticks_add' },
-    ticks_diff: { module: 'time', anchor: 'time.ticks_diff' },
-    gmtime: { module: 'time', anchor: 'time.gmtime' },
-    localtime: { module: 'time', anchor: 'time.localtime' },
-    mktime: { module: 'time', anchor: 'time.mktime' },
-    time: { module: 'time', anchor: 'time.time' },
-    time_ns: { module: 'time', anchor: 'time.time_ns' },
-    // select
-    select: { module: 'select' },
-    poll: { module: 'select', anchor: 'select.poll' },
-    // neopixel
-    neopixel: { module: 'neopixel' },
-    NeoPixel: { module: 'neopixel', anchor: 'neopixel.NeoPixel' },
-    fill: { module: 'neopixel', anchor: 'neopixel.NeoPixel.fill' },
-    pixel_access_methods: { module: 'neopixel', anchor: 'pixel-access-methods' },
-    'pixel-access-methods': { module: 'neopixel', anchor: 'pixel-access-methods' },
-    // machine (common)
-    machine: { module: 'machine' },
-    Pin: { module: 'machine', anchor: 'machine.Pin' },
-    I2C: { module: 'machine', anchor: 'machine.I2C' },
-    SPI: { module: 'machine', anchor: 'machine.SPI' },
-    PWM: { module: 'machine', anchor: 'machine.PWM' },
-    ADC: { module: 'machine', anchor: 'machine.ADC' },
-    UART: { module: 'machine', anchor: 'machine.UART' },
-    RTC: { module: 'machine', anchor: 'machine.RTC' },
-    WDT: { module: 'machine', anchor: 'machine.WDT' },
-    Timer: { module: 'machine', anchor: 'machine.Timer' },
-    reset: { module: 'machine', anchor: 'machine.reset' },
-    soft_reset: { module: 'machine', anchor: 'machine.soft_reset' },
-    unique_id: { module: 'machine', anchor: 'machine.unique_id' },
-    freq: { module: 'machine', anchor: 'machine.freq' },
-    idle: { module: 'machine', anchor: 'machine.idle' },
-})
-function getMicroPythonSymbolEntry(word) {
-    const lower = word.toLowerCase().replace(/-/g, '_')
-    const snake = camelToSnake(word)
-    if (API_REF_MICROPYTHON_SYMBOLS[lower]) return API_REF_MICROPYTHON_SYMBOLS[lower]
-    if (snake !== lower && API_REF_MICROPYTHON_SYMBOLS[snake]) return API_REF_MICROPYTHON_SYMBOLS[snake]
-    if (API_REF_MICROPYTHON_SYMBOLS[word]) return API_REF_MICROPYTHON_SYMBOLS[word]
-    return null
-}
 
 /** Resolve editor word to MicroPython docs URL when base is docs.micropython.org. Returns { pageUrl, anchor, confident }. */
 function wordToMicroPythonDocUrl(word, base) {
@@ -1171,6 +1132,8 @@ function wordToApiRefAnchor(word) {
         const fuzzy = anchors.find((a) => a === prefix || a.startsWith(prefix))
         if (fuzzy) return { anchor: fuzzy, confident: true }
     }
+    const jlAnchor = getJumperlessAnchor(word)
+    if (jlAnchor) return { anchor: jlAnchor, confident: true }
     return { anchor: fallback, confident: false }
 }
 
@@ -1201,28 +1164,64 @@ function syncApiRefToClicked(editor, posOverride) {
 
     if (isMicroPython) {
         const mp = wordToMicroPythonDocUrl(word, base)
-        if (!mp.pageUrl) {
-            console.log('[API Ref] MicroPython: no match for word:', word)
+        if (mp.pageUrl && mp.confident) {
+            url = mp.anchor ? mp.pageUrl + '#' + mp.anchor : mp.pageUrl
+            anchor = mp.anchor
+            confident = true
+            useAnchor = !!anchor
+            console.log('[API Ref] MicroPython: word:', word, '->', url, '(confident)')
+            applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
             return
         }
-        url = mp.anchor ? mp.pageUrl + '#' + mp.anchor : mp.pageUrl
-        anchor = mp.anchor
-        confident = mp.confident
-        useAnchor = !!anchor
-        console.log('[API Ref] MicroPython: word:', word, '->', url, mp.confident ? '(confident)' : '(module guess)')
-        apiRefUrlExists(mp.pageUrl).then((exists) => {
-            console.log('[API Ref] MicroPython: HEAD', mp.pageUrl, exists ? '-> ok' : '-> 404 / failed')
-            if (!exists) {
+        const our = wordToApiRefAnchor(word)
+        if (our.confident && our.anchor) {
+            const jlIdx = getDocSiteIndexByOrigin(API_REF_OUR_DOCS_ORIGIN)
+            if (jlIdx >= 0) {
+                setSelectedDocIndex(jlIdx)
+                refreshApiRefDocPicker()
+                const jlBase = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
+                url = jlBase + '#' + our.anchor
+                anchor = our.anchor
+                confident = true
+                useAnchor = true
+                console.log('[API Ref] fallback to Jumperless: word:', word, '->', url)
+                applyApiRefNavigation(iframe, jlBase, url, anchor, useAnchor, word, confident)
                 return
             }
-            applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
-        })
+        }
+        if (!mp.pageUrl) console.log('[API Ref] MicroPython: no match for word:', word)
+        else if (!mp.confident) console.log('[API Ref] MicroPython: skipping module guess (link not verified):', word)
         return
     }
 
     const our = wordToApiRefAnchor(word)
-    anchor = our.anchor
-    confident = our.confident
+    if (our.confident && our.anchor && !JUMPERLESS_FORCE_MICROPYTHON.includes(word)) {
+        anchor = our.anchor
+        confident = true
+        url = base + '#' + anchor
+        useAnchor = true
+        applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
+        return
+    }
+    const mpEntry = getMicroPythonSymbolEntry(word)
+    if (mpEntry) {
+        const mpIdx = getDocSiteIndexByOrigin(API_REF_MICROPYTHON_ORIGIN)
+        if (mpIdx >= 0) {
+            setSelectedDocIndex(mpIdx)
+            refreshApiRefDocPicker()
+            const mpBase = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
+            const mp = wordToMicroPythonDocUrl(word, mpBase)
+            if (mp.pageUrl) {
+                url = mp.anchor ? mp.pageUrl + '#' + mp.anchor : mp.pageUrl
+                anchor = mp.anchor
+                confident = true
+                useAnchor = !!anchor
+                console.log('[API Ref] fallback to MicroPython: word:', word, '->', url)
+                applyApiRefNavigation(iframe, mpBase, url, anchor, useAnchor, word, confident)
+                return
+            }
+        }
+    }
     url = anchor ? base + '#' + anchor : base
     useAnchor = !!anchor
     applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
@@ -1236,14 +1235,15 @@ function applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confi
     }
     apiRefLastScrollKey = scrollKey
     apiRefLastScrollTime = now
-    console.log('[API Ref] URL:', url, useAnchor ? (confident ? '(anchor)' : '(slug)') : '(search fallback)')
+    const urlLabel = useAnchor ? (confident ? '(anchor)' : '(slug)') : (confident ? '(page)' : '(search fallback)')
+    console.log('[API Ref] URL:', url, urlLabel)
     if (API_REF_DEBUG) {
         console.log('[API Ref] word:', word, '| anchor:', anchor, '| confident:', confident, '| base:', base)
     }
     const isMicroPython = base.includes(API_REF_MICROPYTHON_ORIGIN)
     if (!isMicroPython && apiRefIframeLoadedBase === base) {
         if (useAnchor) {
-            apiRefPostMessageScroll(iframe, base, anchor)
+            iframe.src = url
         } else {
             apiRefPostMessageSearch(iframe, base, word)
         }
@@ -1253,12 +1253,11 @@ function applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confi
     if (useAnchor) {
         apiRefPendingScrollAnchor = anchor
         apiRefPendingSearchText = null
-        iframe.src = url
     } else {
         apiRefPendingScrollAnchor = null
         apiRefPendingSearchText = word
-        iframe.src = base
     }
+    iframe.src = url
 }
 
 export function toggleApiRefPanel() {
@@ -1267,6 +1266,7 @@ export function toggleApiRefPanel() {
     if (!panel || !iframe) return
     panel.classList.toggle('collapsed')
     const isOpen = !panel.classList.contains('collapsed')
+    document.body.classList.toggle('api-ref-open', isOpen)
     try {
         localStorage.setItem(API_REF_STORAGE_KEY, isOpen ? '1' : '0')
     } catch (_) {}
@@ -1283,6 +1283,7 @@ export function toggleApiRefFullWidth() {
     if (!container || !panel || !iframe) return
     if (panel.classList.contains('collapsed')) {
         panel.classList.remove('collapsed')
+        document.body.classList.add('api-ref-open')
         try { localStorage.setItem(API_REF_STORAGE_KEY, '1') } catch (_) {}
         if (iframe.src === 'about:blank' || !iframe.src) setApiRefIframeSrc(iframe, getCurrentDocUrl())
     }
@@ -1637,6 +1638,7 @@ export function applyTranslation() {
         try {
             if (localStorage.getItem(API_REF_STORAGE_KEY) !== '0') {
                 apiRefPanel.classList.remove('collapsed')
+                document.body.classList.add('api-ref-open')
                 if (apiRefIframe) setApiRefIframeSrc(apiRefIframe, getCurrentDocUrl())
             } else {
                 apiRefPanel.classList.add('collapsed')

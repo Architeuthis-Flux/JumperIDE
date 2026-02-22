@@ -157,6 +157,7 @@ button.connected {
 .fa-sliders { color: #ccd6dd }
 .fa-trash-can { color: #ccdde8 }
 .fa-star { color: #ffcc4d; }
+.fa-file-code.menu-script-icon { color: #ec4899; }
 
 .highlight {
     background: var(--bg-color-edit);
