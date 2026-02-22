@@ -985,23 +985,51 @@ const API_REF_GO_TO_CLICKED_KEY = 'apiRefGoToClicked'
 const SIDE_MENU_WIDTH_KEY = 'sideMenuWidth'
 const API_REF_PANEL_WIDTH_KEY = 'apiRefPanelWidth'
 const SIDE_MENU_MIN = 80
-const SIDE_MENU_MAX = 560
+const SIDE_MENU_MAX = 960
 const API_REF_PANEL_MIN = 100
 const API_REF_PANEL_MAX = 960
 let apiRefGoToClickedDebounce = null
+let apiRefIframeLoadedBase = ''
+let apiRefLastSetBase = ''
+let apiRefPendingScrollAnchor = null
 
-// MkDocs / Read the Docs slug: lowercase, remove ()[] and =, replace spaces/underscores/commas with hyphens
+function apiRefPostMessageScroll(iframe, base, anchor) {
+    if (!iframe?.contentWindow || !base || !anchor) return
+    try {
+        const origin = new URL(base.startsWith('http') ? base : 'https://' + base).origin
+        iframe.contentWindow.postMessage({ type: 'jumperide-scroll-to', anchor }, origin)
+    } catch (_) {}
+}
+
+function ensureApiRefIframeLoadHandler(iframe) {
+    if (!iframe || iframe.dataset.apiRefLoadBound) return
+    iframe.dataset.apiRefLoadBound = '1'
+    iframe.addEventListener('load', () => {
+        apiRefIframeLoadedBase = apiRefLastSetBase
+        if (apiRefPendingScrollAnchor) {
+            apiRefPostMessageScroll(iframe, apiRefIframeLoadedBase, apiRefPendingScrollAnchor)
+            apiRefPendingScrollAnchor = null
+        }
+    })
+}
+
+function setApiRefIframeSrc(iframe, url) {
+    if (!iframe || !url) return
+    apiRefLastSetBase = (url || '').replace(/#.*$/, '').replace(/\/?$/, '')
+    ensureApiRefIframeLoadHandler(iframe)
+    iframe.src = url
+}
+
+// MkDocs heading ID: match docs.jumperless.org anchors (underscores kept, e.g. get_net_nodesnetnum, gpio_set_read_floatingpin-enabled)
 function readTheDocsSlug(text) {
     if (!text) return ''
     return text
-        .replace(/\s/g, '-')
-        .replace(/[()[\]']/g, '')
-        .replace(/=/g, '')
-        .replace(/,/g, '-')
-        .replace(/_/g, '-')
+        .toLowerCase()
+        .replace(/\s*,\s*/g, '-')
+        .replace(/[()=\[\]']/g, '')
+        .replace(/\s+/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
-        .toLowerCase()
 }
 
 // Function headings from generated/api_ref_data.js (from 09.5-micropythonAPIreference.md); symbol -> exact heading slug
@@ -1026,7 +1054,7 @@ function symbolToAnchor(symbol) {
         if (symbol == null || typeof symbol !== 'string') return ''
         const lower = String(symbol).toLowerCase().replace(/-/g, '_')
         if (API_REF_FUNCTION_ANCHORS && API_REF_FUNCTION_ANCHORS[lower]) return API_REF_FUNCTION_ANCHORS[lower]
-        return lower.replace(/_/g, '-')
+        return lower
     } catch (_) {
         return ''
     }
@@ -1055,26 +1083,17 @@ function syncApiRefToClicked(editor, posOverride) {
     const iframe = QID('api-ref-iframe')
     if (!iframe || !anchor) return
     const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
-    const newSrc = base + '#' + anchor
-    const currentBase = (iframe.src || '').replace(/#.*$/, '').replace(/\/?$/, '')
-    let currentHash = ''
-    try {
-        const u = new URL(iframe.src || '')
-        currentHash = u.hash ? decodeURIComponent(u.hash.slice(1)) : ''
-    } catch (_) {}
+    ensureApiRefIframeLoadHandler(iframe)
     if (API_REF_DEBUG) {
-        console.log('[API Ref] word:', word, '| symbolKey:', lower, '| anchor:', anchor, '| fromMap:', !!fromMap, '| base:', base, '| newSrc:', newSrc)
+        console.log('[API Ref] word:', word, '| symbolKey:', lower, '| anchor:', anchor, '| fromMap:', !!fromMap, '| base:', base)
     }
-    if (currentBase === base && currentHash === anchor) return
-    const onLoad = () => {
-        iframe.removeEventListener('load', onLoad)
-        if (API_REF_DEBUG) console.log('[API Ref] iframe load: re-applying hash', anchor)
-        requestAnimationFrame(() => {
-            iframe.src = base + '#' + anchor
-        })
+    if (apiRefIframeLoadedBase === base) {
+        apiRefPostMessageScroll(iframe, base, anchor)
+        return
     }
-    iframe.addEventListener('load', onLoad, { once: true })
-    iframe.src = newSrc
+    apiRefLastSetBase = base
+    apiRefPendingScrollAnchor = anchor
+    iframe.src = base + '#' + anchor
 }
 
 let apiRefHoverDebounce = null
@@ -1100,7 +1119,7 @@ export function toggleApiRefPanel() {
         localStorage.setItem(API_REF_STORAGE_KEY, isOpen ? '1' : '0')
     } catch (_) {}
     if (isOpen) {
-        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = getCurrentDocUrl()
+        if (iframe.src === 'about:blank' || !iframe.src) setApiRefIframeSrc(iframe, getCurrentDocUrl())
     }
 }
 
@@ -1113,7 +1132,7 @@ export function toggleApiRefFullWidth() {
     if (panel.classList.contains('collapsed')) {
         panel.classList.remove('collapsed')
         try { localStorage.setItem(API_REF_STORAGE_KEY, '1') } catch (_) {}
-        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = getCurrentDocUrl()
+        if (iframe.src === 'about:blank' || !iframe.src) setApiRefIframeSrc(iframe, getCurrentDocUrl())
     }
     container.classList.toggle('api-ref-fullwidth')
     updateApiRefFullWidthButton(container, btn)
@@ -1449,7 +1468,7 @@ export function applyTranslation() {
             const idx = parseInt(apiRefDocPicker.value, 10)
             if (!Number.isNaN(idx)) {
                 setSelectedDocIndex(idx)
-                if (apiRefIframe) apiRefIframe.src = getCurrentDocUrl()
+                if (apiRefIframe) setApiRefIframeSrc(apiRefIframe, getCurrentDocUrl())
                 const link = QID('api-ref-docs-link')
                 if (link) link.href = getCurrentDocUrl()
             }
@@ -1459,14 +1478,14 @@ export function applyTranslation() {
     onSettingChange('selectedDocIndex', () => {
         refreshApiRefDocPicker()
         if (apiRefIframe && apiRefPanel && !apiRefPanel.classList.contains('collapsed')) {
-            apiRefIframe.src = getCurrentDocUrl()
+            setApiRefIframeSrc(apiRefIframe, getCurrentDocUrl())
         }
     })
     if (apiRefPanel) {
         try {
             if (localStorage.getItem(API_REF_STORAGE_KEY) !== '0') {
                 apiRefPanel.classList.remove('collapsed')
-                if (apiRefIframe) apiRefIframe.src = getCurrentDocUrl()
+                if (apiRefIframe) setApiRefIframeSrc(apiRefIframe, getCurrentDocUrl())
             } else {
                 apiRefPanel.classList.add('collapsed')
             }
