@@ -992,12 +992,23 @@ let apiRefGoToClickedDebounce = null
 let apiRefIframeLoadedBase = ''
 let apiRefLastSetBase = ''
 let apiRefPendingScrollAnchor = null
+let apiRefPendingSearchText = null
+
+const API_REF_OUR_DOCS_ORIGIN = 'https://docs.jumperless.org'
 
 function apiRefPostMessageScroll(iframe, base, anchor) {
     if (!iframe?.contentWindow || !base || !anchor) return
     try {
         const origin = new URL(base.startsWith('http') ? base : 'https://' + base).origin
         iframe.contentWindow.postMessage({ type: 'jumperide-scroll-to', anchor }, origin)
+    } catch (_) {}
+}
+
+function apiRefPostMessageSearch(iframe, base, searchText) {
+    if (!iframe?.contentWindow || !base || !searchText) return
+    try {
+        const origin = new URL(base.startsWith('http') ? base : 'https://' + base).origin
+        iframe.contentWindow.postMessage({ type: 'jumperide-scroll-to', searchText }, origin)
     } catch (_) {}
 }
 
@@ -1009,6 +1020,10 @@ function ensureApiRefIframeLoadHandler(iframe) {
         if (apiRefPendingScrollAnchor) {
             apiRefPostMessageScroll(iframe, apiRefIframeLoadedBase, apiRefPendingScrollAnchor)
             apiRefPendingScrollAnchor = null
+        }
+        if (apiRefPendingSearchText && apiRefIframeLoadedBase && apiRefIframeLoadedBase.startsWith(API_REF_OUR_DOCS_ORIGIN)) {
+            apiRefPostMessageSearch(iframe, apiRefIframeLoadedBase, apiRefPendingSearchText)
+            apiRefPendingSearchText = null
         }
     })
 }
@@ -1049,15 +1064,27 @@ try {
 
 const API_REF_DEBUG = typeof localStorage !== 'undefined' && localStorage.getItem('apiRefDebug') === '1'
 
-function symbolToAnchor(symbol) {
-    try {
-        if (symbol == null || typeof symbol !== 'string') return ''
-        const lower = String(symbol).toLowerCase().replace(/-/g, '_')
-        if (API_REF_FUNCTION_ANCHORS && API_REF_FUNCTION_ANCHORS[lower]) return API_REF_FUNCTION_ANCHORS[lower]
-        return lower
-    } catch (_) {
-        return ''
+// CamelCase to snake_case so setSwitchPosition -> set_switch_position for map lookup
+function camelToSnake(str) {
+    if (!str || typeof str !== 'string') return ''
+    return str.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/-/g, '_')
+}
+
+/** Resolve editor word to docs anchor. Returns { anchor, confident }; confident = from map or fuzzy (so we can fall back to page search when false). */
+function wordToApiRefAnchor(word) {
+    if (!word || typeof word !== 'string') return { anchor: '', confident: false }
+    const lower = word.toLowerCase().replace(/-/g, '_')
+    const snake = camelToSnake(word)
+    const fallback = snake || lower
+    if (API_REF_FUNCTION_ANCHORS) {
+        if (API_REF_FUNCTION_ANCHORS[lower] !== undefined) return { anchor: API_REF_FUNCTION_ANCHORS[lower], confident: true }
+        if (snake !== lower && API_REF_FUNCTION_ANCHORS[snake] !== undefined) return { anchor: API_REF_FUNCTION_ANCHORS[snake], confident: true }
+        const prefix = snake || lower
+        const anchors = Object.values(API_REF_FUNCTION_ANCHORS)
+        const fuzzy = anchors.find((a) => a === prefix || a.startsWith(prefix))
+        if (fuzzy) return { anchor: fuzzy, confident: true }
     }
+    return { anchor: fallback, confident: false }
 }
 
 function getWordAtPosition(editor, pos) {
@@ -1077,23 +1104,32 @@ function syncApiRefToClicked(editor, posOverride) {
     const pos = posOverride !== undefined ? posOverride : editor.state.selection.main.head
     const word = getWordAtPosition(editor, pos)
     if (!word) return
-    const lower = word.toLowerCase().replace(/-/g, '_')
-    const fromMap = API_REF_FUNCTION_ANCHORS && API_REF_FUNCTION_ANCHORS[lower]
-    const anchor = fromMap !== undefined ? fromMap : symbolToAnchor(word)
+    const { anchor, confident } = wordToApiRefAnchor(word)
     const iframe = QID('api-ref-iframe')
-    if (!iframe || !anchor) return
+    if (!iframe) return
     const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
     ensureApiRefIframeLoadHandler(iframe)
     if (API_REF_DEBUG) {
-        console.log('[API Ref] word:', word, '| symbolKey:', lower, '| anchor:', anchor, '| fromMap:', !!fromMap, '| base:', base)
+        console.log('[API Ref] word:', word, '| anchor:', anchor, '| confident:', confident, '| base:', base)
     }
     if (apiRefIframeLoadedBase === base) {
-        apiRefPostMessageScroll(iframe, base, anchor)
+        if (confident && anchor) {
+            apiRefPostMessageScroll(iframe, base, anchor)
+        } else {
+            apiRefPostMessageSearch(iframe, base, word)
+        }
         return
     }
     apiRefLastSetBase = base
-    apiRefPendingScrollAnchor = anchor
-    iframe.src = base + '#' + anchor
+    if (confident && anchor) {
+        apiRefPendingScrollAnchor = anchor
+        apiRefPendingSearchText = null
+        iframe.src = base + '#' + anchor
+    } else {
+        apiRefPendingScrollAnchor = null
+        apiRefPendingSearchText = word
+        iframe.src = base + (anchor ? '#' + anchor : '')
+    }
 }
 
 let apiRefHoverDebounce = null
