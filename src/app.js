@@ -1035,18 +1035,14 @@ function setApiRefIframeSrc(iframe, url) {
     iframe.src = url
 }
 
-// MkDocs heading ID: match docs.jumperless.org anchors exactly (e.g. #clickwheel_get_directionconsumetrue, #set_switch_positionposition).
-// Rules: lowercase, commas→hyphen, strip ()[]='` and =, collapse hyphens, trim. Underscores kept.
+// MkDocs heading ID: docs use slug that strips everything after '(' (see Jumperless-docs slugify_headings.py).
+// So anchors are function names only: #gpio_set, #clickwheel_reset_position, #connect.
 function readTheDocsSlug(text) {
     if (!text) return ''
-    return String(text)
-        .replace(/`/g, '')
-        .toLowerCase()
-        .replace(/\s*,\s*/g, '-')
-        .replace(/[()=[\]']/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '')
+    let t = String(text).replace(/`/g, '').trim()
+    const idx = t.indexOf('(')
+    if (idx >= 0) t = t.slice(0, idx).trim()
+    return t.toLowerCase().replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'section'
 }
 
 // Function headings from generated/api_ref_data.js (from 09.5-micropythonAPIreference.md); symbol -> exact heading slug
@@ -1112,12 +1108,13 @@ function syncApiRefToClicked(editor, posOverride) {
     const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
     ensureApiRefIframeLoadHandler(iframe)
     const url = anchor ? base + '#' + anchor : base
-    console.log('[API Ref] URL:', url, confident ? '(anchor)' : '(search fallback)')
+    const useAnchor = !!anchor
+    console.log('[API Ref] URL:', url, useAnchor ? (confident ? '(anchor)' : '(slug)') : '(search fallback)')
     if (API_REF_DEBUG) {
         console.log('[API Ref] word:', word, '| anchor:', anchor, '| confident:', confident, '| base:', base)
     }
     if (apiRefIframeLoadedBase === base) {
-        if (confident && anchor) {
+        if (useAnchor) {
             apiRefPostMessageScroll(iframe, base, anchor)
         } else {
             apiRefPostMessageSearch(iframe, base, word)
@@ -1125,14 +1122,14 @@ function syncApiRefToClicked(editor, posOverride) {
         return
     }
     apiRefLastSetBase = base
-    if (confident && anchor) {
+    if (useAnchor) {
         apiRefPendingScrollAnchor = anchor
         apiRefPendingSearchText = null
         iframe.src = base + '#' + anchor
     } else {
         apiRefPendingScrollAnchor = null
         apiRefPendingSearchText = word
-        iframe.src = base + (anchor ? '#' + anchor : '')
+        iframe.src = base
     }
 }
 
