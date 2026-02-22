@@ -1035,10 +1035,12 @@ function setApiRefIframeSrc(iframe, url) {
     iframe.src = url
 }
 
-// MkDocs heading ID: match docs.jumperless.org anchors (underscores kept, e.g. get_net_nodesnetnum, gpio_set_read_floatingpin-enabled)
+// MkDocs heading ID: match docs.jumperless.org anchors exactly (e.g. #clickwheel_get_directionconsumetrue, #set_switch_positionposition).
+// Rules: lowercase, commas→hyphen, strip ()[]='` and =, collapse hyphens, trim. Underscores kept.
 function readTheDocsSlug(text) {
     if (!text) return ''
-    return text
+    return String(text)
+        .replace(/`/g, '')
         .toLowerCase()
         .replace(/\s*,\s*/g, '-')
         .replace(/[()=[\]']/g, '')
@@ -1109,6 +1111,8 @@ function syncApiRefToClicked(editor, posOverride) {
     if (!iframe) return
     const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
     ensureApiRefIframeLoadHandler(iframe)
+    const url = anchor ? base + '#' + anchor : base
+    console.log('[API Ref] URL:', url, confident ? '(anchor)' : '(search fallback)')
     if (API_REF_DEBUG) {
         console.log('[API Ref] word:', word, '| anchor:', anchor, '| confident:', confident, '| base:', base)
     }
