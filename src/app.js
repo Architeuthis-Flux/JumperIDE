@@ -990,14 +990,15 @@ const API_REF_PANEL_MIN = 100
 const API_REF_PANEL_MAX = 960
 let apiRefGoToClickedDebounce = null
 
-// Read the Docs / Sphinx slug: remove spaces, remove ()[] and =, replace , with -, lowercase
+// MkDocs / Read the Docs slug: lowercase, remove ()[] and =, replace spaces/underscores/commas with hyphens
 function readTheDocsSlug(text) {
     if (!text) return ''
     return text
-        .replace(/\s/g, '')
+        .replace(/\s/g, '-')
         .replace(/[()[\]']/g, '')
         .replace(/=/g, '')
         .replace(/,/g, '-')
+        .replace(/_/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')
         .toLowerCase()
@@ -1068,7 +1069,9 @@ function syncApiRefToClicked(editor, posOverride) {
     const onLoad = () => {
         iframe.removeEventListener('load', onLoad)
         if (API_REF_DEBUG) console.log('[API Ref] iframe load: re-applying hash', anchor)
-        iframe.src = base + '#' + anchor
+        requestAnimationFrame(() => {
+            iframe.src = base + '#' + anchor
+        })
     }
     iframe.addEventListener('load', onLoad, { once: true })
     iframe.src = newSrc
