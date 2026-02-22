@@ -35,7 +35,7 @@ import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
-import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin } from './oled_bin_viewer.js'
+import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin } from './oled_bin_viewer.js'
 
 import { splitPath, sleep, fetchJSON, getUserUID, getScreenInfo, IdleMonitor,
          getCssPropertyValue, QSA, QS, QID, iOS, sanitizeHTML, isRunningStandalone,
@@ -1026,7 +1026,7 @@ function readTheDocsSlug(text) {
     return text
         .toLowerCase()
         .replace(/\s*,\s*/g, '-')
-        .replace(/[()=\[\]']/g, '')
+        .replace(/[()=[\]']/g, '')
         .replace(/\s+/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '')

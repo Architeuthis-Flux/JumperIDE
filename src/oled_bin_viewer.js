@@ -167,7 +167,7 @@ export function buildOledBin(width, height, bitmap, withHeader) {
 }
 
 const SCALE = 4
-const PAD = 16
+const _PAD = 16
 
 /**
  * Create OLED BIN viewer/editor in targetElement.
@@ -360,8 +360,8 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
 
 
     const ctx = canvas.getContext('2d')
-    const onColor = '#fff'
-    const offColor = '#000'
+    const _onColor = '#fff'
+    const _offColor = '#000'
 
     function renderCanvas() {
         const w = canvas.width

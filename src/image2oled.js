@@ -63,8 +63,8 @@ function drawImageToCanvas(img, opts) {
     ctx.fillStyle = bgFill
     ctx.fillRect(0, 0, cw, ch)
 
-    let sw = iw
-    let sh = ih
+    let _sw = iw
+    let _sh = ih
     let dx = 0
     let dy = 0
     let dw = cw
