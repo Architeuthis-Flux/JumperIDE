@@ -395,6 +395,21 @@ async function execReplNoFollow(cmd) {
     //await port.write('\x04')            // Ctrl-D: execute
 }
 
+/**
+ * Send OLED framebuffer (512 or 1024 bytes, SSD1306 format) to device via REPL.
+ * Uses binascii.a2b_base64 so the REPL line stays short. Calls oled_show() to refresh display.
+ */
+async function sendOledFramebufferToDevice(fb) {
+    if (!port || !fb) return
+    try {
+        const b64 = btoa(String.fromCharCode.apply(null, fb))
+        const cmd = `import binascii;oled_set_framebuffer(binascii.a2b_base64('${b64}'));oled_show()`
+        await execReplNoFollow(cmd)
+    } catch (err) {
+        report('OLED framebuffer send failed', err)
+    }
+}
+
 function _updateFileTree(fs_tree, fs_stats)
 {
     let [fs_used, _fs_free, fs_size] = fs_stats;
@@ -581,10 +596,12 @@ async function _loadContent(fn, content, editorElement) {
 
     if (content instanceof Uint8Array && !willDisasm) {
         if (fn.endsWith('.bin') && parseOledBin(content)) {
-            const viewer = oledBinViewer(content, fn.split('/').pop(), editorElement, {
+            const viewerOptions = {
                 onViewAsHex: () => switchOledBinToHexView(fn),
-                onImportPng: () => importPngToOledBitmap()
-            })
+                onImportPng: () => importPngToOledBitmap(),
+                onPushFramebuffer: (fb) => sendOledFramebufferToDevice(fb)
+            }
+            const viewer = oledBinViewer(content, fn.split('/').pop(), editorElement, viewerOptions)
             if (viewer) {
                 oledBinViewers.set(fn, viewer)
                 editorFn = fn
@@ -1332,10 +1349,12 @@ function switchOledBinToHexView(fn) {
         if (!ed || !v) return
         const b = v.getBytes()
         ed.innerHTML = ''
-        const newViewer = oledBinViewer(b, f.split('/').pop(), ed, {
+        const bitmapOptions = {
             onViewAsHex: () => switchOledBinToHexView(f),
             onImportPng: () => importPngToOledBitmap()
-        })
+        }
+        if (port) bitmapOptions.onPushFramebuffer = (fb) => sendOledFramebufferToDevice(fb)
+        const newViewer = oledBinViewer(b, f.split('/').pop(), ed, bitmapOptions)
         oledBinViewers.set(f, newViewer)
         newViewer.setOnDirtyCallback(() => {
             const fileEl = QS(`#menu-file-tree [data-fn="${f}"]`)

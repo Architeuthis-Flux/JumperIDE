@@ -147,6 +147,31 @@ export function pngToOledBin(file, options = {}) {
 }
 
 /**
+ * Convert row-major bitmap (MSB first per byte) to SSD1306 framebuffer format.
+ * SSD1306 is page-major: each page = 8 rows, 128 bytes per page (one per column).
+ * Within each byte: LSB = top pixel, MSB = bottom (of that 8-pixel column).
+ * Always returns 512 (128×32) or 1024 (128×64) bytes; crops/pads from bitmap as needed.
+ * @param {Uint8Array} bitmap - row-major bitmap (no header)
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array} 512 or 1024 bytes
+ */
+export function bitmapToSsd1306Framebuffer(bitmap, width, height) {
+    const outHeight = height > 32 ? 64 : 32
+    const fb = new Uint8Array(outHeight === 32 ? 512 : 1024)
+    for (let y = 0; y < outHeight; y++) {
+        for (let x = 0; x < 128; x++) {
+            const p = getPixel(bitmap, width, height, x, y)
+            const byteIdx = (y >> 3) * 128 + x
+            const bit = y & 7
+            if (p) fb[byteIdx] |= 1 << bit
+            else fb[byteIdx] &= ~(1 << bit)
+            }
+    }
+    return fb
+}
+
+/**
  * Build full file bytes (header + bitmap) for saving.
  * @param {number} width
  * @param {number} height
@@ -175,7 +200,7 @@ const _PAD = 16
  * @param {Uint8Array} bytes - full file (with or without header)
  * @param {string} fn - filename
  * @param {HTMLElement} targetElement
- * @param {{ onViewAsHex?: () => void, onImportPng?: () => void }} [options] - optional toolbar actions
+ * @param {{ onViewAsHex?: () => void, onImportPng?: () => void, onPushFramebuffer?: (fb: Uint8Array) => void | Promise<void> }} [options] - optional toolbar actions; onPushFramebuffer called with SSD1306 fb when bitmap changes (128×32 or 128×64 only), debounced
  * @returns {{ getBytes: () => Uint8Array, setDirty: (boolean) => void, isDirty: () => boolean }}
  */
 export function oledBinViewer(bytes, fn, targetElement, options = {}) {
@@ -199,6 +224,22 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     let lastDrawY = -1
     /** Per-stroke: only toggle each pixel once when in toggle mode */
     const toggledThisStroke = new Set()
+    let pushFramebufferTimeout = 0
+    const PUSH_DEBOUNCE_MS = 100
+    let liveUpdateOn = true
+
+    function schedulePushFramebuffer() {
+        if (!options.onPushFramebuffer || !liveUpdateOn) return
+        clearTimeout(pushFramebufferTimeout)
+        pushFramebufferTimeout = setTimeout(() => {
+            pushFramebufferTimeout = 0
+            const fb = bitmapToSsd1306Framebuffer(bitmapCopy, width, height)
+            try {
+                const p = options.onPushFramebuffer(fb)
+                if (p && typeof p.then === 'function') p.catch(() => {})
+            } catch (_) {}
+        }, PUSH_DEBOUNCE_MS)
+    }
 
     const container = document.createElement('div')
     container.className = 'oled-bin-viewer'
@@ -206,7 +247,8 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     const info = document.createElement('div')
     info.className = 'oled-bin-info'
     function updateInfo() {
-        info.textContent = `${width}×${height} • ${hasHeader ? 'with header' : 'raw'} • ${fn}`
+        const live = options.onPushFramebuffer ? (liveUpdateOn ? ' • live on' : ' • live off') : ''
+        info.textContent = `${width}×${height} • ${hasHeader ? 'with header' : 'raw'} • ${fn}${live}`
     }
     updateInfo()
     container.appendChild(info)
@@ -260,6 +302,25 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         viewAsHexBtn.classList.add('oled-bin-view-as-hex')
         viewAsHexBtn.addEventListener('click', options.onViewAsHex)
         toolbar.appendChild(viewAsHexBtn)
+    }
+    if (options.onPushFramebuffer) {
+        const liveLabel = document.createElement('label')
+        liveLabel.className = 'oled-bin-live-check'
+        const liveCheckbox = document.createElement('input')
+        liveCheckbox.type = 'checkbox'
+        liveCheckbox.checked = liveUpdateOn
+        liveCheckbox.title = 'Push bitmap to device when you make changes'
+        liveCheckbox.addEventListener('change', () => {
+            liveUpdateOn = liveCheckbox.checked
+            if (!liveUpdateOn) {
+                clearTimeout(pushFramebufferTimeout)
+                pushFramebufferTimeout = 0
+            }
+            updateInfo()
+        })
+        liveLabel.appendChild(liveCheckbox)
+        liveLabel.appendChild(document.createTextNode(' Live to device'))
+        toolbar.appendChild(liveLabel)
     }
     setDrawMode('toggle')
     container.appendChild(toolbar)
@@ -345,6 +406,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
                 if (typeof cb === 'function') cb()
             } catch (_) {}
         }
+        schedulePushFramebuffer()
     }
     const resizeBtn = document.createElement('button')
     resizeBtn.type = 'button'
@@ -438,6 +500,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         lastDrawY = y
         renderCanvas()
         notifyDirty()
+        schedulePushFramebuffer()
     }
 
     canvas.addEventListener('mousedown', (e) => {
@@ -470,6 +533,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     })
 
     renderCanvas()
+    schedulePushFramebuffer()
 
     targetElement.innerHTML = ''
     targetElement.appendChild(container)
