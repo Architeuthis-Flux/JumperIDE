@@ -15,7 +15,7 @@ export default [
           variables: false,
       }],
       "no-undef": "error",
-      "no-empty": "warn",
+      "no-empty": ["warn", { allowEmptyCatch: true }],
     },
     languageOptions: {
       globals: {
@@ -25,5 +25,10 @@ export default [
         VIPER_IDE_BUILD:    "readonly",
       }
     }
+  },
+  /* Node script for local use only (not run on deploy) */
+  {
+    files: ["scripts/**/*.js"],
+    languageOptions: { globals: globals.node },
   }
 ]
