@@ -16,7 +16,7 @@ allow terminal coloring
 get LED and oled framebuffer from Jumperless and display them in JumperIDE (may beed some functions in firmware)
 make SVG version of Jumperless and show the actual LED state
 
-BIN format viewer (maybe editor)
+~~BIN format viewer (maybe editor)~~ — Jumperless OLED .bin viewer/editor added
 
 config settings / change from JumperIDE
 

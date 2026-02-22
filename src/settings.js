@@ -1,17 +1,62 @@
 import { QID } from './utils.js'
 
+/** Default doc sites shown in the docs sidebar (name + url). */
+const DEFAULT_CUSTOM_DOC_SITES = [
+    { name: 'MicroPython', url: 'https://docs.micropython.org/en/latest/library/index.html#python-standard-libraries-and-micro-libraries' },
+    { name: 'Jumperless API', url: 'https://docs.jumperless.org/09.5-micropythonAPIreference/' }
+]
 
 const settingsElement = QID("menu-settings")
 let callbacks = new Map()
 let settings = _loadSettings()
 
 /**
- *
  * @param {string} setting The name of the setting to query
- * @returns {boolean} Returns the value of the setting if found, else undefined
+ * @returns {*} Returns the value of the setting if found, else undefined
  */
 export function getSetting(setting) {
     return settings[setting]
+}
+
+/**
+ * @returns {{ name: string, url: string }[]} List of custom doc sites
+ */
+export function getCustomDocSites() {
+    const sites = settings.customDocSites
+    if (!Array.isArray(sites) || sites.length === 0) return DEFAULT_CUSTOM_DOC_SITES.slice()
+    return sites.map(s => ({ name: String(s?.name ?? ''), url: String(s?.url ?? '') }))
+}
+
+/**
+ * @param {{ name: string, url: string }[]} sites New list of custom doc sites
+ */
+export function setCustomDocSites(sites) {
+    if (!Array.isArray(sites)) return
+    settings.customDocSites = sites.map(s => ({ name: String(s?.name ?? ''), url: String(s?.url ?? '') }))
+    _persistSettings(settings)
+    _notify('customDocSites', settings.customDocSites)
+}
+
+/**
+ * @returns {number} Index of the currently selected doc site
+ */
+export function getSelectedDocIndex() {
+    const idx = settings.selectedDocIndex
+    const n = (settings.customDocSites || DEFAULT_CUSTOM_DOC_SITES).length
+    if (typeof idx !== 'number' || idx < 0 || idx >= n) return n >= 2 ? 1 : 0
+    return idx
+}
+
+/**
+ * @param {number} index Index of the doc site to select
+ */
+export function setSelectedDocIndex(index) {
+    const n = (settings.customDocSites || DEFAULT_CUSTOM_DOC_SITES).length
+    const i = Math.max(0, Math.min(index, n - 1))
+    if (settings.selectedDocIndex === i) return
+    settings.selectedDocIndex = i
+    _persistSettings(settings)
+    _notify('selectedDocIndex', i)
 }
 
 
@@ -92,6 +137,17 @@ function _loadSettings() {
         _setLoadedValue(element.id, loadedSettings[element.id], element.value, (value) => element.value = value)
     })
 
+    // Custom doc sites (not in DOM): ensure defaults and persist so they survive next DOM-only persist
+    if (!Array.isArray(loadedSettings.customDocSites) || loadedSettings.customDocSites.length === 0) {
+        loadedSettings.customDocSites = DEFAULT_CUSTOM_DOC_SITES.slice()
+        if (typeof loadedSettings.selectedDocIndex !== 'number' || loadedSettings.selectedDocIndex < 0) {
+            loadedSettings.selectedDocIndex = 1
+        }
+        _persistSettings(loadedSettings)
+    } else if (typeof loadedSettings.selectedDocIndex !== 'number' || loadedSettings.selectedDocIndex < 0) {
+        loadedSettings.selectedDocIndex = 1
+    }
+
     return loadedSettings
 }
 
@@ -106,6 +162,16 @@ function _persistSettings(newSettings = undefined) {
         settingsElement.querySelectorAll("select").forEach(element => {
             newSettings[element.id] = element.value
         })
+        // preserve custom doc sites and selected index (not in DOM); never reference `settings` here
+        // because _persistSettings() can be called from _loadSettings() before `settings` is initialized
+        let source
+        try {
+            source = JSON.parse(localStorage.getItem('settings'))
+        } catch (_) {
+            source = null
+        }
+        if (Array.isArray(source?.customDocSites)) newSettings.customDocSites = source.customDocSites
+        if (typeof source?.selectedDocIndex === 'number') newSettings.selectedDocIndex = source.selectedDocIndex
     }
 
     localStorage.setItem("settings", JSON.stringify(newSettings))

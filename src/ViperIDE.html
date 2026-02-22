@@ -79,6 +79,9 @@
             </div>
             <div id="menu-tools" class="tab-content">
                 <div id="menu-tools-title">Tools</div>
+                <div id="menu-tools-import-callout" class="menu-tools-callout">
+                    <a href="#" onclick="app.importPngToOledBitmap();return false;"><i class="fa-solid fa-file-import fa-fw"></i> Import PNG → OLED bitmap</a>
+                </div>
                 <div id="menu-tools-list">
                     <div class="title-lines" id="menu-tools-line-conn">device connection</div>
                     <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Relay.md" target="_blank">    <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL over internet 🌎</a></div>
@@ -89,6 +92,11 @@
 
                     <div class="title-lines" id="menu-line-pkg-mgr">package manager</div>
                     <div><a href="#" onclick="app.installPkgFromUrl()" id="install-via-url">📦 Install package via link</a></div>
+
+                    <div class="title-lines" id="menu-tools-oled">OLED bitmap</div>
+                    <div><a href="#" onclick="app.createNewOledBitmap();return false;" id="new-oled-bitmap">🖼 New OLED bitmap (128×32, black)</a></div>
+                    <div><a href="#" onclick="app.openImage2OledInEditor();return false;">🖼 Image to OLED (image2cpp-style)</a></div>
+                    <div><a href="#" onclick="app.importPngToOledBitmap();return false;" id="import-png-oled">📷 Import PNG → OLED bitmap (128×32)</a></div>
 
                     <div class="title-lines" id="menu-tools-python">Python</div>
                     <div><a href="#" onclick="app.pyPrettify()" id="py-prettify">🎀 Prettify current file</a></div>
@@ -162,6 +170,9 @@
                         </select>
                     </div>
                     <div><input type="checkbox" id="use-natural-sort" checked/><label for="use-natural-sort">Use natural sorting</label></div>
+                    <div class="title-lines" id="menu-line-docs">docs</div>
+                    <div id="custom-doc-sites-container"></div>
+                    <button type="button" id="custom-doc-add" title="Add a documentation site">Add doc site</button>
                 </div>
             </div>
             <div id="menu-about" class="tab-content">
@@ -216,7 +227,8 @@
         <div id="api-ref-panel" class="collapsed">
             <div id="api-ref-header">
                 <label><input type="checkbox" id="api-ref-go-to-clicked"/> Go To Clicked Function</label>
-                <a href="https://docs.jumperless.org" target="_blank" rel="noopener noreferrer" id="api-ref-docs-link" title="Open Jumperless docs in a new tab">Docs ➠</a>
+                <select id="api-ref-doc-picker" title="Switch documentation site"></select>
+                <a href="#" target="_blank" rel="noopener noreferrer" id="api-ref-docs-link" title="Open current docs in a new tab">Docs ➠</a>
                 <button title="Docs full width" onclick="app.toggleApiRefFullWidth()" id="btn-api-ref-fullwidth"><i class="fa-solid fa-expand"></i></button>
             </div>
             <iframe id="api-ref-iframe" title="MicroPython API Reference" src="about:blank"></iframe>

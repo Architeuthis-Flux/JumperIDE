@@ -36,6 +36,10 @@ fs.mkdirSync('build', { recursive: true })
 fs.copyFileSync('src/ViperIDE.html',  'build/index.html')
 fs.copyFileSync('src/benchmark.html', 'build/benchmark.html')
 fs.copyFileSync('src/bridge.html',    'build/bridge.html')
+fs.copyFileSync('src/image2oled.html', 'build/image2oled.html')
+fs.copyFileSync('src/image2oled.js',   'build/image2oled.js')
+fs.copyFileSync('src/image2oled.css',  'build/image2oled.css')
+fs.copyFileSync('src/app_common.css',  'build/app_common.css')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')
 }

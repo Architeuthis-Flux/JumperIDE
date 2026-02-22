@@ -30,11 +30,12 @@ import { ConnectionUID } from './connection_uid.js'
 import translations from './translations.json'
 import { parseStackTrace, validatePython, disassembleMPY, minifyPython, prettifyPython } from './python_utils.js'
 import { MicroPythonWASM } from './emulator.js'
-import { getSetting, onSettingChange, updateSetting } from './settings.js'
+import { getSetting, onSettingChange, updateSetting, getCustomDocSites, setCustomDocSites, getSelectedDocIndex, setSelectedDocIndex } from './settings.js'
 import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
+import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin } from './oled_bin_viewer.js'
 
 import { splitPath, sleep, fetchJSON, getUserUID, getScreenInfo, IdleMonitor,
          getCssPropertyValue, QSA, QS, QID, iOS, sanitizeHTML, isRunningStandalone,
@@ -45,7 +46,7 @@ import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
 import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress, faImage
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
@@ -53,7 +54,7 @@ library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress)
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress, faImage)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -71,6 +72,8 @@ let editor, term, port
 let editorFn = ''
 let isInRunMode = false
 let devInfo = null
+/** @type {Map<string, { getBytes: () => Uint8Array, setDirty: (boolean) => void, isDirty: () => boolean }>} */
+const oledBinViewers = new Map()
 
 async function disconnectDevice() {
     if (port) {
@@ -311,17 +314,50 @@ export async function createNewFile(path) {
         } else {
             const full = path + fn
             if (fn.includes('/')) {
-                // Ensure path exists
                 const [dirname, _] = splitPath(full)
                 await raw.makePath(dirname)
             }
-            await raw.touchFile(full)
+            if (full.endsWith('.bin')) {
+                await raw.writeFile(full, defaultOledBinBytes(128, 32))
+            } else {
+                await raw.touchFile(full)
+            }
             await _raw_loadFile(raw, full)
         }
         await _raw_updateFileTree(raw)
     } finally {
         await raw.end()
     }
+}
+
+/** Create a new OLED bitmap tab: 128 wide × 32 tall, all black pixels, with header. No device connection required. */
+export async function createNewOledBitmap() {
+    const fn = 'Untitled.bin'
+    const defaultBytes = defaultOledBinBytes(128, 32)
+    const editorElement = createTab(fn)
+    await _loadContent(fn, defaultBytes, editorElement)
+}
+
+/** Virtual tab name for the Image to OLED tool (opened in center editor, not a file). */
+export const IMAGE2OLED_TAB_FN = 'Image to OLED'
+
+/** Open the Image to OLED (image2cpp-style) tool in the center editor as a tab. Reuses existing tab if already open. */
+export function openImage2OledInEditor() {
+    if (displayOpenFile(IMAGE2OLED_TAB_FN)) {
+        return
+    }
+    const editorElement = createTab(IMAGE2OLED_TAB_FN)
+    editorElement.innerHTML = ''
+    const iframe = document.createElement('iframe')
+    iframe.src = 'image2oled.html'
+    iframe.className = 'i2o-iframe i2o-iframe-editor'
+    iframe.title = 'Image to OLED'
+    editorElement.appendChild(iframe)
+}
+
+/** Open file picker for PNG; convert to 128×32 OLED .bin and open in a new tab. */
+export async function importPngToOledBitmap() {
+    openImage2OledInEditor()
 }
 
 export async function removeFile(path) {
@@ -526,10 +562,14 @@ async function _raw_loadFile(raw, fn) {
         return
     } else {
         content = await raw.readFile(fn)
-        try {
-            content = (new TextDecoder('utf-8', { fatal: true })).decode(content)
-        } catch (err) {
-            toastr.error(`Unable to load file: ${err}`)
+        if (fn.endsWith('.bin') && (content.length === 0 || !parseOledBin(content))) {
+            content = defaultOledBinBytes(128, 32)
+        } else if (!fn.endsWith('.bin')) {
+            try {
+                content = (new TextDecoder('utf-8', { fatal: true })).decode(content)
+            } catch (err) {
+                toastr.error(`Unable to load file: ${err}`)
+            }
         }
     }
     await _loadContent(fn, content, createTab(fn))
@@ -539,7 +579,26 @@ async function _loadContent(fn, content, editorElement) {
     const willDisasm = fn.endsWith('.mpy') && QID('advanced-mode').checked
 
     if (content instanceof Uint8Array && !willDisasm) {
-        hexViewer(content.buffer, editorElement)
+        if (fn.endsWith('.bin') && parseOledBin(content)) {
+            const viewer = oledBinViewer(content, fn.split('/').pop(), editorElement, {
+                onViewAsHex: () => switchOledBinToHexView(fn),
+                onImportPng: () => importPngToOledBitmap()
+            })
+            if (viewer) {
+                oledBinViewers.set(fn, viewer)
+                editorFn = fn
+                viewer.setOnDirtyCallback(() => {
+                    const fileEl = QS(`#menu-file-tree [data-fn="${fn}"]`)
+                    if (fileEl) fileEl.classList.add('changed')
+                    const tabTitle = QS(`#editor-tabs [data-fn="${fn}"] .tab-title`)
+                    if (tabTitle) tabTitle.classList.add('changed')
+                })
+            } else {
+                hexViewer(content.buffer, editorElement)
+            }
+        } else {
+            hexViewer(content.buffer, editorElement)
+        }
         editor = null
     } else if (fn.endsWith('.md') && getSetting('render-markdown')) {
         editorElement.innerHTML = `<div class="marked-viewer">` + marked(content) + `</div>`
@@ -583,7 +642,41 @@ async function _loadContent(fn, content, editorElement) {
 }
 
 export async function saveCurrentFile() {
+    if (editorFn === IMAGE2OLED_TAB_FN) return
     if (!port) return;
+
+    if (!editor && oledBinViewers.has(editorFn)) {
+        if (editorFn === 'Untitled.bin' || editorFn === 'images/Untitled.bin') {
+            const defaultName = editorFn.startsWith('images/') ? 'images/logo.bin' : 'logo.bin'
+            const fn = prompt('Save OLED bitmap as:', defaultName)
+            if (fn == null || fn === '') return
+            const oldFn = editorFn
+            const viewer = oledBinViewers.get(oldFn)
+            oledBinViewers.delete(oldFn)
+            oledBinViewers.set(fn, viewer)
+            editorFn = fn
+            document.dispatchEvent(new CustomEvent('fileRenamed', { detail: { old: oldFn, new: fn } }))
+        }
+        const viewer = oledBinViewers.get(editorFn)
+        const raw = await MpRawMode.begin(port)
+        try {
+            if (editorFn.includes('/')) {
+                const [dirname] = splitPath(editorFn)
+                await raw.makePath(dirname)
+            }
+            await raw.writeFile(editorFn, viewer.getBytes())
+            await _raw_updateFileTree(raw)
+        } finally {
+            await raw.end()
+        }
+        viewer.setDirty(false)
+        document.dispatchEvent(new CustomEvent("fileSaved", { detail: { fn: editorFn } }))
+        QS(`#menu-file-tree [data-fn="${editorFn}"]`)?.classList.remove("changed")
+        QS(`#editor-tabs [data-fn="${editorFn}"] .tab-title`)?.classList.remove("changed")
+        toastr.success('File Saved')
+        return
+    }
+
     if (!editor) return;
 
     if (editor.state.readOnly) {
@@ -863,8 +956,31 @@ export function autoHideSideMenu() {
     }
 }
 
-const API_REF_BASE_URL = 'https://docs.jumperless.org/09.5-micropythonAPIreference/'
 const API_REF_STORAGE_KEY = 'apiRefPanelOpen'
+
+function getCurrentDocUrl() {
+    const sites = getCustomDocSites()
+    const idx = getSelectedDocIndex()
+    if (!sites.length) return 'https://docs.jumperless.org/09.5-micropythonAPIreference/'
+    return sites[idx]?.url || sites[0]?.url || 'about:blank'
+}
+
+function refreshApiRefDocPicker() {
+    const picker = QID('api-ref-doc-picker')
+    const link = QID('api-ref-docs-link')
+    if (!picker) return
+    const sites = getCustomDocSites()
+    const selected = getSelectedDocIndex()
+    picker.innerHTML = ''
+    sites.forEach((s, i) => {
+        const opt = document.createElement('option')
+        opt.value = String(i)
+        opt.textContent = s.name || s.url || `Doc ${i + 1}`
+        picker.appendChild(opt)
+    })
+    picker.value = String(Math.max(0, Math.min(selected, sites.length - 1)))
+    if (link) link.href = getCurrentDocUrl()
+}
 const API_REF_GO_TO_CLICKED_KEY = 'apiRefGoToClicked'
 const SIDE_MENU_WIDTH_KEY = 'sideMenuWidth'
 const API_REF_PANEL_WIDTH_KEY = 'apiRefPanelWidth'
@@ -933,8 +1049,16 @@ function syncApiRefToClicked(editor, posOverride) {
     const anchor = symbolToAnchor(word)
     const iframe = QID('api-ref-iframe')
     if (!iframe || !anchor) return
-    const newSrc = API_REF_BASE_URL + '#' + anchor
-    if (iframe.src !== newSrc) iframe.src = newSrc
+    const base = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
+    const newSrc = base + '#' + anchor
+    const currentBase = (iframe.src || '').replace(/#.*$/, '').replace(/\/?$/, '')
+    let currentHash = ''
+    try {
+        const u = new URL(iframe.src || '')
+        currentHash = u.hash ? decodeURIComponent(u.hash.slice(1)) : ''
+    } catch (_) {}
+    if (currentBase === base && currentHash === anchor) return
+    iframe.src = newSrc
 }
 
 let apiRefHoverDebounce = null
@@ -960,7 +1084,7 @@ export function toggleApiRefPanel() {
         localStorage.setItem(API_REF_STORAGE_KEY, isOpen ? '1' : '0')
     } catch (_) {}
     if (isOpen) {
-        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = API_REF_BASE_URL
+        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = getCurrentDocUrl()
     }
 }
 
@@ -973,7 +1097,7 @@ export function toggleApiRefFullWidth() {
     if (panel.classList.contains('collapsed')) {
         panel.classList.remove('collapsed')
         try { localStorage.setItem(API_REF_STORAGE_KEY, '1') } catch (_) {}
-        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = API_REF_BASE_URL
+        if (iframe.src === 'about:blank' || !iframe.src) iframe.src = getCurrentDocUrl()
     }
     container.classList.toggle('api-ref-fullwidth')
     updateApiRefFullWidthButton(container, btn)
@@ -985,6 +1109,51 @@ function updateApiRefFullWidthButton(container, btn) {
     btn.title = isFull ? 'Exit full width docs' : 'Docs full width'
     btn.innerHTML = isFull ? '<i class="fa-solid fa-compress"></i>' : '<i class="fa-solid fa-expand"></i>'
     if (typeof dom !== 'undefined' && dom.watch) dom.watch()
+}
+
+function switchOledBinToHexView(fn) {
+    const tab = QS(`#editor-tabs [data-fn="${fn}"]`)
+    if (!tab) return
+    const pane = QS(`.editor-tab-pane[data-pane="${tab.dataset.tab}"]`)
+    if (!pane) return
+    const editorElement = pane.querySelector('.editor')
+    if (!editorElement) return
+    const viewer = oledBinViewers.get(fn)
+    if (!viewer) return
+    const bytes = viewer.getBytes()
+    editorElement.innerHTML = ''
+    const wrapper = document.createElement('div')
+    wrapper.className = 'oled-bin-hex-wrap'
+    wrapper.dataset.oledBinFn = fn
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'oled-bin-view-as-bitmap'
+    btn.textContent = 'View as bitmap'
+    btn.title = 'Switch back to bitmap editor'
+    btn.addEventListener('click', () => {
+        const f = wrapper.dataset.oledBinFn
+        const ed = wrapper.closest('.editor')
+        const v = oledBinViewers.get(f)
+        if (!ed || !v) return
+        const b = v.getBytes()
+        ed.innerHTML = ''
+        const newViewer = oledBinViewer(b, f.split('/').pop(), ed, {
+            onViewAsHex: () => switchOledBinToHexView(f),
+            onImportPng: () => importPngToOledBitmap()
+        })
+        oledBinViewers.set(f, newViewer)
+        newViewer.setOnDirtyCallback(() => {
+            const fileEl = QS(`#menu-file-tree [data-fn="${f}"]`)
+            if (fileEl) fileEl.classList.add('changed')
+            const tabTitle = QS(`#editor-tabs [data-fn="${f}"] .tab-title`)
+            if (tabTitle) tabTitle.classList.add('changed')
+        })
+    })
+    const hexContainer = document.createElement('div')
+    hexViewer(bytes.buffer, hexContainer)
+    wrapper.appendChild(btn)
+    wrapper.appendChild(hexContainer)
+    editorElement.appendChild(wrapper)
 }
 
 function hexViewer(arrayBuffer, targetElement) {
@@ -1260,11 +1429,31 @@ export function applyTranslation() {
     const apiRefPanel = QID('api-ref-panel')
     const apiRefIframe = QID('api-ref-iframe')
     const apiRefGoToClickedCheckbox = QID('api-ref-go-to-clicked')
+    const apiRefDocPicker = QID('api-ref-doc-picker')
+    refreshApiRefDocPicker()
+    if (apiRefDocPicker) {
+        apiRefDocPicker.addEventListener('change', () => {
+            const idx = parseInt(apiRefDocPicker.value, 10)
+            if (!Number.isNaN(idx)) {
+                setSelectedDocIndex(idx)
+                if (apiRefIframe) apiRefIframe.src = getCurrentDocUrl()
+                const link = QID('api-ref-docs-link')
+                if (link) link.href = getCurrentDocUrl()
+            }
+        })
+    }
+    onSettingChange('customDocSites', refreshApiRefDocPicker)
+    onSettingChange('selectedDocIndex', () => {
+        refreshApiRefDocPicker()
+        if (apiRefIframe && apiRefPanel && !apiRefPanel.classList.contains('collapsed')) {
+            apiRefIframe.src = getCurrentDocUrl()
+        }
+    })
     if (apiRefPanel) {
         try {
-            if (localStorage.getItem(API_REF_STORAGE_KEY) === '1') {
+            if (localStorage.getItem(API_REF_STORAGE_KEY) !== '0') {
                 apiRefPanel.classList.remove('collapsed')
-                if (apiRefIframe) apiRefIframe.src = API_REF_BASE_URL
+                if (apiRefIframe) apiRefIframe.src = getCurrentDocUrl()
             } else {
                 apiRefPanel.classList.add('collapsed')
             }
@@ -1279,6 +1468,63 @@ export function applyTranslation() {
                 } catch (_) {}
             })
         }
+    }
+
+    function renderCustomDocSites() {
+        const container = QID('custom-doc-sites-container')
+        if (!container) return
+        const sites = getCustomDocSites()
+        container.innerHTML = ''
+        sites.forEach((site, i) => {
+            const row = document.createElement('div')
+            row.className = 'custom-doc-site-row'
+            const nameInput = document.createElement('input')
+            nameInput.type = 'text'
+            nameInput.placeholder = 'Name'
+            nameInput.value = site.name
+            nameInput.title = 'Display name for this doc site'
+            const urlInput = document.createElement('input')
+            urlInput.type = 'url'
+            urlInput.placeholder = 'https://…'
+            urlInput.value = site.url
+            urlInput.title = 'Documentation URL'
+            const removeBtn = document.createElement('button')
+            removeBtn.type = 'button'
+            removeBtn.className = 'custom-doc-remove'
+            removeBtn.title = 'Remove this doc site'
+            removeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>'
+            removeBtn.addEventListener('click', () => {
+                const next = getCustomDocSites().filter((_, j) => j !== i)
+                setCustomDocSites(next.length ? next : [{ name: 'MicroPython', url: 'https://docs.micropython.org/en/latest/library/index.html#python-standard-libraries-and-micro-libraries' }])
+                renderCustomDocSites()
+            })
+            const updateSite = () => {
+                const list = getCustomDocSites()
+                if (i < list.length) {
+                    list[i] = { name: nameInput.value.trim(), url: urlInput.value.trim() }
+                    setCustomDocSites(list)
+                }
+            }
+            nameInput.addEventListener('change', updateSite)
+            nameInput.addEventListener('blur', updateSite)
+            urlInput.addEventListener('change', updateSite)
+            urlInput.addEventListener('blur', updateSite)
+            row.appendChild(nameInput)
+            row.appendChild(urlInput)
+            row.appendChild(removeBtn)
+            container.appendChild(row)
+        })
+        if (typeof dom !== 'undefined' && dom.watch) dom.watch()
+    }
+    renderCustomDocSites()
+    const customDocAddBtn = QID('custom-doc-add')
+    if (customDocAddBtn) {
+        customDocAddBtn.addEventListener('click', () => {
+            const sites = getCustomDocSites()
+            sites.push({ name: 'New site', url: 'https://' })
+            setCustomDocSites(sites)
+            renderCustomDocSites()
+        })
     }
 
     toastr.options.preventDuplicates = true;
@@ -1401,6 +1647,7 @@ Connect your Jumperless board and start coding!
         }
     })
     document.addEventListener("tabClosed", (event) => {
+        if (event.detail.fn !== IMAGE2OLED_TAB_FN) oledBinViewers.delete(event.detail.fn)
         const fileElement = QS(`#menu-file-tree [data-fn="${event.detail.fn}"]`)
         if (fileElement) {
             fileElement.classList.remove("open")
@@ -1411,6 +1658,33 @@ Connect your Jumperless board and start coding!
     setTimeout(() => {
         document.body.classList.add('loaded')
     }, 100)
+
+    function openBinFromImage2Oled(b64, path) {
+        const fn = path || 'images/Untitled.bin'
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+        const editorElement = createTab(fn)
+        _loadContent(fn, bytes, editorElement)
+        QS('[data-target="menu-files"]')?.click()
+        autoHideSideMenu()
+    }
+
+    const pendingBin = localStorage.getItem('jumperide_open_bin')
+    if (pendingBin) {
+        try {
+            localStorage.removeItem('jumperide_open_bin')
+            const fn = localStorage.getItem('jumperide_open_bin_fn') || 'images/Untitled.bin'
+            localStorage.removeItem('jumperide_open_bin_fn')
+            openBinFromImage2Oled(pendingBin, fn)
+        } catch (e) {
+            console.error('Failed to open bin from Image to OLED', e)
+        }
+    }
+
+    window.addEventListener('message', (e) => {
+        if (e.data?.type === 'jumperide-open-bin' && e.data?.bin) {
+            openBinFromImage2Oled(e.data.bin, e.data.path)
+        }
+    })
 
     const urlParams = new URLSearchParams(window.location.search)
     let urlID = null

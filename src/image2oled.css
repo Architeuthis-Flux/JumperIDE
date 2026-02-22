@@ -1,0 +1,212 @@
+/* Image to OLED page — image2cpp-style layout */
+
+#image2oled-page {
+    min-height: 100vh;
+    padding: 1rem 1.5rem 2rem;
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.i2o-header {
+    margin-bottom: 1.5rem;
+}
+
+body.i2o-embedded .i2o-back {
+    display: none;
+}
+
+.i2o-back {
+    display: inline-block;
+    margin-bottom: 0.5rem;
+    color: var(--fg-color-highlight, orange);
+    text-decoration: none;
+}
+
+.i2o-back:hover {
+    text-decoration: underline;
+}
+
+.i2o-header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 0.25rem;
+}
+
+.i2o-desc {
+    margin: 0;
+    opacity: 0.85;
+    font-size: 0.9rem;
+}
+
+.i2o-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.i2o-section {
+    background: var(--bg-color-edit, #111314);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.i2o-section h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+}
+
+/* Drop zone */
+.i2o-dropzone {
+    border: 2px dashed rgba(255,255,255,0.25);
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.i2o-dropzone:hover,
+.i2o-dropzone.dragover {
+    border-color: var(--fg-color-highlight, orange);
+    background: rgba(255,165,0,0.05);
+}
+
+.i2o-drop-text {
+    margin: 0;
+    opacity: 0.9;
+}
+
+.i2o-btn-link {
+    background: none;
+    border: none;
+    color: var(--fg-color-highlight, orange);
+    cursor: pointer;
+    text-decoration: underline;
+    font: inherit;
+    padding: 0;
+}
+
+.i2o-btn-link:hover {
+    opacity: 0.9;
+}
+
+/* Settings */
+.i2o-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.i2o-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.i2o-row label {
+    min-width: 10rem;
+}
+
+.i2o-row input[type="number"] {
+    width: 4em;
+    padding: 4px 6px;
+    background: var(--bg-color);
+    color: var(--fg-color);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    font: inherit;
+}
+
+.i2o-row input[type="range"] {
+    width: 10rem;
+    vertical-align: middle;
+}
+
+.i2o-row select {
+    padding: 4px 8px;
+    background: var(--bg-color);
+    color: var(--fg-color);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    font: inherit;
+}
+
+.i2o-inline {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.i2o-inline label {
+    min-width: 0;
+}
+
+/* Preview */
+.i2o-preview-wrap {
+    min-height: 120px;
+    padding: 1rem;
+    background: #0a0a0a;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.i2o-preview-placeholder {
+    color: rgba(255,255,255,0.4);
+    font-size: 0.9rem;
+}
+
+.i2o-preview-canvas {
+    max-width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
+/* Output */
+.i2o-output-info {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    opacity: 0.85;
+}
+
+.i2o-output-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.i2o-btn {
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.25);
+    background: var(--bg-color);
+    color: var(--fg-color);
+}
+
+.i2o-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.1);
+}
+
+.i2o-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.i2o-btn-primary {
+    border-color: var(--fg-color-highlight, orange);
+    background: rgba(255,165,0,0.15);
+    color: var(--fg-color-highlight, orange);
+}
+
+.i2o-btn-primary:hover:not(:disabled) {
+    background: rgba(255,165,0,0.25);
+}
