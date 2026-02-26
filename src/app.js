@@ -33,6 +33,8 @@ import { MicroPythonWASM } from './emulator.js'
 import { getSetting, onSettingChange, updateSetting, getCustomDocSites, setCustomDocSites, getSelectedDocIndex, setSelectedDocIndex } from './settings.js'
 import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROPYTHON } from './apiRefMicroPython.js'
+import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
+import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
@@ -47,15 +49,17 @@ import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
 import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress, faImage
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
+
+import { createEditorSerialTerminalTab, closeAllEditorSerialPorts } from './editor_serial_terminal_tab.js'
 
 library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faXmark, faCompress, faImage)
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -182,6 +186,7 @@ async function prepareNewPort(type) {
             toastr.error('Try Chrome, Edge, Opera, Brave', 'WebSerial and WebUSB are not supported')
             return
         }
+
         if (typeof navigator.serial === 'undefined' || getSetting('force-serial-poly')) {
             console.log('Using WebSerial polyfill')
             new_port = new WebSerial(webSerialPolyfill)
@@ -234,6 +239,8 @@ export async function connectDevice(type) {
     })
 
     QID(`btn-conn-${type}`).classList.add('connected')
+
+
 
     analytics.track('Device Port Connected', Object.assign({ connection: type }, await port.getInfo()))
 
@@ -359,6 +366,22 @@ export function openImage2OledInEditor() {
 /** Open file picker for PNG; convert to 128×32 OLED .bin and open in a new tab. */
 export async function importPngToOledBitmap() {
     openImage2OledInEditor()
+}
+
+// ─── Terminal-in-editor tabs ───────────────────────────────────────────────────
+
+let _termTabCount = 0
+
+
+/** Open a new generic serial terminal in the editor tab area. */
+export function createNewTerminalTab() {
+    _termTabCount++
+    const tabName = `Terminal ${_termTabCount}`
+    createEditorSerialTerminalTab(tabName)
+}
+
+export function createNewJumperlessTerminalTab() {
+    createEditorSerialTerminalTab('Jumperless Terminal')
 }
 
 export async function removeFile(path) {
@@ -952,6 +975,12 @@ export async function installPkgFromUrl() {
 const fileTree = QID('side-menu')
 const overlay = QID('overlay')
 
+/** Open the Jumperless serial terminal (Port 1) tab from the sidebar. */
+export function openJumperlessPort1Terminal() {
+    focusPort1Tab()
+    autoHideSideMenu()
+}
+
 export function toggleSideMenu() {
     if (window.innerWidth <= 768) {
         fileTree.classList.remove('hidden')
@@ -1473,7 +1502,7 @@ export function applyTranslation() {
         QID('btn-conn-ble')?.setAttribute('title', T('tool.conn.ble'))
         QID('btn-conn-usb').setAttribute('title', T('tool.conn.usb'))
         QID('term-clear').setAttribute('title',   T('tool.clear'))
-        QID('tab-term').innerText = T('tool.terminal')
+        QID('tab-term').innerText = 'REPL Terminal'
 
         QSA('#app-expand, #term-expand').forEach(el => {
             el.setAttribute('title', T('tool.fullscreen'))
@@ -1632,6 +1661,7 @@ export function applyTranslation() {
 
     setupTabs(QID('side-menu'))
     setupTabs(QID('terminal-container'))
+    createPort1EditorTab()
 
     applySidebarWidths()
     setupSidebarResizers()
@@ -1768,6 +1798,7 @@ Connect your Jumperless board and start coding!
 `
     await _loadContent(fn, content, createTab(fn))
 
+
     const xtermTheme = {
         foreground: '#F8F8F8',
         background: getCssPropertyValue('--bg-color-edit'),
@@ -1790,14 +1821,11 @@ Connect your Jumperless board and start coding!
         brightWhite: '#FFFFFF'
     }
 
-    term = new Terminal({
-        fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace',
+    term = new Terminal(getTerminalOptions({
         fontSize: (14 * 0.9).toFixed(1),
         theme: xtermTheme,
         cursorBlink: true,
-        convertEol: true,
-        allowProposedApi: true,
-    })
+    }))
     term.open(QID('xterm'))
     term.onData(async (data) => {
         if (!port) return;
@@ -2101,3 +2129,12 @@ function setupSidebarResizers() {
     resizerLeft.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button === 0) startResize('left', e) }, false)
     resizerRight.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button === 0) startResize('right', e) }, false)
 }
+
+// ─── Port Cleanup on Exit ─────────────────────────────────────────────────────
+
+window.addEventListener('beforeunload', () => {
+    // Attempt to disconnect all ports to prevent "Port already open" on refresh
+    try { disconnectDevice() } catch (_) {}
+    try { disconnectPinnedSerial() } catch (_) {}
+    try { closeAllEditorSerialPorts() } catch (_) {}
+})

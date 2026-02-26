@@ -231,7 +231,6 @@ export function indicateActivity() {
 
 export function setupTabs(containerNode) {
     const tabs = containerNode.querySelectorAll('.tab')
-    const tabContents = containerNode.querySelectorAll('.tab-content')
 
     tabs.forEach(tab => {
         tab.setAttribute('href', '#')
@@ -239,11 +238,11 @@ export function setupTabs(containerNode) {
             ev.preventDefault()
             const targetId = tab.getAttribute('data-target')
 
-            tabs.forEach(t => t.classList.remove('active'))
+            containerNode.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
             tab.classList.add('active')
 
-            tabContents.forEach(content => {
-                if (content.id === targetId) {
+            containerNode.querySelectorAll('.tab-content, .editor-tab-pane, .serial-term-pane').forEach(content => {
+                if (content.id === targetId || content.dataset.pane === targetId) {
                     content.classList.add('active')
                 } else {
                     content.classList.remove('active')

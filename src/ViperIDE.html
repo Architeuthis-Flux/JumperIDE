@@ -84,6 +84,7 @@
                 </div>
                 <div id="menu-tools-list">
                     <div class="title-lines" id="menu-tools-line-conn">device connection</div>
+                    <div><a href="#" onclick="app.openJumperlessPort1Terminal();return false;"><i class="fa-solid fa-terminal fa-fw"></i> Jumperless serial terminal (Port 1)</a></div>
                     <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Relay.md" target="_blank">    <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL over internet 🌎</a></div>
                     <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Server.md" target="_blank">   <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL in local network</a></div>
                     <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Bluetooth-REPL.md" target="_blank">    <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> Bluetooth REPL</a></div>
@@ -178,7 +179,7 @@
             <div id="menu-about" class="tab-content">
                 <a class="github-fork-ribbon left-top" href="https://github.com/Architeuthis-Flux/JumperIDE" target="_blank" data-ribbon="Fork me on GitHub" title="Fork me on GitHub">Fork me on GitHub</a>
                 <div style="text-align: center; padding: 50px 0 0 0;">
-                    <img src="assets/ColorBubbleLogoIDE@0.5x.png" alt="Logo" width="30%">
+                    <img src="assets/JumperIDE@0.5x.png" alt="Logo" width="30%">
                     <div style="font-size:1.5em;">JumperIDE</div>
                     <div id='viper-ide-version'></div>
                     <small><div id='viper-ide-build'></div></small>
@@ -205,7 +206,7 @@
             <div id="terminal-container">
                 <div class="tabs" id="terminal-tabs" onmousedown="app.initDrag(event)" ontouchstart="app.initDrag(event)">
                     <div>
-                        <a class="tab active" data-target="xterm"><i class="fa-solid fa-terminal"></i> <span id="tab-term">Terminal</span></a>
+                        <a class="tab active" data-target="xterm"><i class="fa-solid fa-terminal"></i> <span id="tab-term">REPL Terminal</span></a>
                         <!--a class="tab"        data-target="logs"><i class="fa-solid fa-bug"></i> IDE Logs</a-->
                     </div>
                     <div>

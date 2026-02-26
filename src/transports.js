@@ -176,8 +176,12 @@ export class WebSerial extends Transport {
         }
     }
 
-    async requestAccess() {
-        this.port = await this.serial.requestPort()
+    async requestAccess(existingPort = null) {
+        if (existingPort) {
+            this.port = existingPort
+        } else {
+            this.port = await this.serial.requestPort()
+        }
         try {
             const pi = this.port.getInfo()
             this.info = {

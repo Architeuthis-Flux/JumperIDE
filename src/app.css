@@ -33,7 +33,7 @@ body.loaded {
     user-select: none;
 }
 
-#tool-panel > div {
+#tool-panel>div {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -65,7 +65,7 @@ body.api-ref-open #tool-panel #btn-api-ref {
     background-color: var(--bg-color-menu);
     overflow-y: auto;
     transition: margin-left var(--animation),
-                left var(--animation);
+        left var(--animation);
     user-select: none;
 }
 
@@ -293,7 +293,9 @@ body.sidebar-resizing * {
 #editor-tabs {
     justify-content: left;
     padding: 1px 5px;
-    overflow-x: auto
+    overflow-x: auto;
+    position: relative;
+    z-index: 10;
 }
 
 #editor-tabs .tab {
@@ -314,6 +316,92 @@ body.sidebar-resizing * {
 #editor-tabs .tab-title {
     pointer-events: none;
     text-wrap: nowrap;
+}
+
+/* ── + New-tab popup wrapper ── */
+.new-tab-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+}
+
+.new-tab-btn {
+    cursor: pointer;
+    padding: 2px 10px;
+    user-select: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
+.new-tab-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 200;
+    background: var(--bg-color-menu, #252526);
+    border: 1px solid var(--border-color, #3c3c3c);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    min-width: 140px;
+    padding: 4px 0;
+    white-space: nowrap;
+}
+
+.new-tab-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    font-size: 0.88rem;
+    color: var(--fg-color);
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.new-tab-menu-item:hover {
+    background: var(--fg-color-highlight, #007acc);
+    color: #fff;
+}
+
+.new-tab-menu-item.ntm-disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* ── Drag-between-panels ── */
+#editor-tabs .tab[draggable="true"],
+#terminal-tabs .tab[draggable="true"] {
+    cursor: grab;
+}
+
+.tab-dragging {
+    opacity: 0.45;
+}
+
+#editor-tabs.tab-drag-over,
+#terminal-tabs>div:first-child.tab-drag-over {
+    outline: 2px dashed var(--fg-color-highlight, #007acc);
+    outline-offset: -2px;
+    border-radius: 3px;
+}
+
+/* ── Bare terminal tab opened in the editor area ── */
+.editor-term-xterm {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    padding: 4px;
+}
+
+/* Pane moved into the terminal region needs to flex properly */
+.terminal-region-pane {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .editor-tab-pane {
@@ -387,9 +475,100 @@ body.sidebar-resizing * {
     gap: 6px;
 }
 
-#xterm {
-    height: 0px;
+/* ── Pinned editor tabs (non-closeable, e.g. Serial Terminal) ── */
+#editor-tabs .tab-pinned {
+    border-left: 3px solid var(--fg-color-highlight);
+    padding-left: 7px;
+    font-style: normal;
+    opacity: 0.85;
+    cursor: pointer;
+}
+
+#editor-tabs .tab-pinned.active {
+    opacity: 1;
+}
+
+/* ── Pinned Serial Terminal pane ── */
+.serial-term-pane {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
     background: var(--bg-color-edit);
+}
+
+.serial-term-pane.active {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.serial-term-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    background: var(--border-color, #2a2a2a);
+    border-bottom: 1px solid var(--bg-color);
+}
+
+.serial-term-btn {
+    padding: 3px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    background: var(--bg-color);
+    color: var(--fg-color);
+    border: 1px solid var(--fg-color);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.serial-term-btn:hover {
+    background: var(--fg-color-highlight);
+    color: var(--bg-color);
+}
+
+.serial-term-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.serial-term-status {
+    font-size: 0.82rem;
+    color: var(--fg-color);
+    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+}
+
+.serial-term-font-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.serial-term-spacer {
+    flex: 1;
+}
+
+.serial-term-xterm {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    padding: 4px;
+}
+
+/* Bottom REPL terminal */
+#xterm {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-color-edit);
+    height: 0;
 }
 
 .marked-viewer {
@@ -413,15 +592,18 @@ body.sidebar-resizing * {
     display: flex;
     flex-direction: column;
 }
+
 .oled-bin-info {
     font-size: 0.85rem;
     color: var(--fg-color);
     opacity: 0.9;
     margin-bottom: 8px;
 }
+
 .oled-bin-toolbar {
     margin-bottom: 8px;
 }
+
 .oled-bin-toolbar button {
     padding: 4px 10px;
     font-size: 0.9rem;
@@ -431,20 +613,25 @@ body.sidebar-resizing * {
     border: 1px solid var(--fg-color);
     border-radius: 4px;
 }
+
 .oled-bin-toolbar button:hover {
     opacity: 0.9;
 }
+
 .oled-bin-toolbar button.active {
     background: var(--fg-color);
     color: var(--bg-color);
 }
+
 .oled-bin-toolbar button.oled-bin-invert {
     margin-left: 8px;
 }
+
 .oled-bin-toolbar button.oled-bin-import-png,
 .oled-bin-toolbar button.oled-bin-view-as-hex {
     margin-left: 8px;
 }
+
 .oled-bin-toolbar .oled-bin-live-check {
     margin-left: 12px;
     font-size: 0.9rem;
@@ -453,11 +640,13 @@ body.sidebar-resizing * {
     gap: 6px;
     cursor: pointer;
 }
+
 .oled-bin-hex-wrap {
     padding: 12px;
     overflow: auto;
     height: 100%;
 }
+
 .oled-bin-hex-wrap .oled-bin-view-as-bitmap {
     margin-bottom: 8px;
     padding: 4px 10px;
@@ -468,9 +657,11 @@ body.sidebar-resizing * {
     border: 1px solid var(--fg-color);
     border-radius: 4px;
 }
+
 .oled-bin-hex-wrap .oled-bin-view-as-bitmap:hover {
     opacity: 0.9;
 }
+
 .oled-bin-dimensions {
     display: flex;
     align-items: center;
@@ -479,9 +670,11 @@ body.sidebar-resizing * {
     margin-bottom: 0;
     flex-wrap: wrap;
 }
+
 .oled-bin-dimensions label {
     margin-right: 2px;
 }
+
 .oled-bin-dim-input {
     min-width: 4.5em;
     width: 4.5em;
@@ -492,6 +685,7 @@ body.sidebar-resizing * {
     border: 1px solid var(--fg-color);
     border-radius: 4px;
 }
+
 .oled-bin-canvas-wrap {
     display: inline-block;
     padding: 8px;
@@ -506,6 +700,7 @@ body.sidebar-resizing * {
     max-height: min(80vh, 800px);
     box-sizing: border-box;
 }
+
 .oled-bin-canvas-wrap canvas {
     display: block;
     width: 100%;
@@ -513,28 +708,34 @@ body.sidebar-resizing * {
     border: 1px solid #333;
     box-sizing: border-box;
 }
+
 .oled-bin-hint {
     font-size: 0.8rem;
     color: var(--fg-color);
     opacity: 0.7;
 }
 
-.hexed-viewer {
-    /* container for hex viewer */
-}
+/* .hexed-viewer — structural container, no styles needed */
+
 .hexed-line {
     display: flex;
 }
-.hexed-address, .hexed-hex-part, .hexed-ascii-part {
+
+.hexed-address,
+.hexed-hex-part,
+.hexed-ascii-part {
     padding: 0 8px;
 }
+
 .hexed-address {
     font-weight: 300;
     border-right: 1px solid var(--bg-color);
 }
+
 .hexed-hex-part {
     color: #f8f8f2;
 }
+
 .hexed-ascii-part {
     color: #e6db74;
 }
@@ -546,28 +747,39 @@ body.sidebar-resizing * {
 }
 
 /* Fix touch interaction on iOS */
-.cm-editor, .cm-scroller, .cm-content, .tab-content, #side-menu {
+.cm-editor,
+.cm-scroller,
+.cm-content,
+.tab-content,
+#side-menu {
     touch-action: pan-x pan-y !important;
     overscroll-behavior: none !important;
 }
 
-#menu-file-title, #menu-pkg-title, #menu-scripts-title, #menu-settings-title, #menu-tools-title {
+#menu-file-title,
+#menu-pkg-title,
+#menu-scripts-title,
+#menu-settings-title,
+#menu-tools-title {
     font-weight: bold;
     /* font-family:'Gill Sans', sans-serif; */
     font-size: medium;
-    background: linear-gradient(to bottom, #d9ff00,#d9ff00,#ffcc00, #ff0073, #ff0090);
+    background: linear-gradient(to bottom, #d9ff00, #d9ff00, #ffcc00, #ff0073, #ff0090);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    filter: drop-shadow(-0.4px -0.4px 0 #000) drop-shadow(0.4px -0.4px 0 #000) drop-shadow(-0.4px 0.4px 0 #000) drop-shadow(0.4px 0.4px 0 #000)
-            drop-shadow(0 -0.4px 0 #000) drop-shadow(0 0.4px 0 #000) drop-shadow(-0.4px 0 0 #000) drop-shadow(0.4px 0 0 #000);
+    filter: drop-shadow(-0.4px -0.4px 0 #000) drop-shadow(0.4px -0.4px 0 #000) drop-shadow(-0.4px 0.4px 0 #000) drop-shadow(0.4px 0.4px 0 #000) drop-shadow(0 -0.4px 0 #000) drop-shadow(0 0.4px 0 #000) drop-shadow(-0.4px 0 0 #000) drop-shadow(0.4px 0 0 #000);
     margin: 0px 0 10px 0;
 }
 
-#menu-file-tree div, #menu-pkg-list div, #menu-scripts-list div, #menu-settings-list div, #menu-tools-list div {
+#menu-file-tree div,
+#menu-pkg-list div,
+#menu-scripts-list div,
+#menu-settings-list div,
+#menu-tools-list div {
     margin: 5px 0;
     line-height: 1.2em;
-    
+
 }
 
 #menu-file-tree div .name {
@@ -619,7 +831,7 @@ body.sidebar-resizing * {
     transition: opacity 0.15s ease, max-height 0.2s ease;
 }
 
-#menu-scripts-list .menu-script-row:hover + .menu-script-desc {
+#menu-scripts-list .menu-script-row:hover+.menu-script-desc {
     opacity: 0.8;
     max-height: 10em;
     margin: 15px 4px 15px 4px;
@@ -665,16 +877,16 @@ body.sidebar-resizing * {
         backdrop-filter: blur(3px);
         -webkit-backdrop-filter: blur(3px);
         transition: visibility 0s,
-                    background-color var(--animation),
-                    backdrop-filter var(--animation),
-                    -webkit-backdrop-filter var(--animation);
+            background-color var(--animation),
+            backdrop-filter var(--animation),
+            -webkit-backdrop-filter var(--animation);
     }
 
     #overlay:not(.show) {
         transition: visibility var(--animation),
-                    background-color var(--animation),
-                    backdrop-filter var(--animation),
-                    -webkit-backdrop-filter var(--animation);
+            background-color var(--animation),
+            backdrop-filter var(--animation),
+            -webkit-backdrop-filter var(--animation);
     }
 }
 
@@ -692,6 +904,5 @@ body.sidebar-resizing * {
 
 /* Toast notifications: start below toolbar so they don't cover connection buttons */
 #toast-container.toast-top-right {
-    top: 52px;
+    top: 92px;
 }
-
