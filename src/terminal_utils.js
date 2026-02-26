@@ -6,13 +6,58 @@
  */
 export function getTerminalOptions(overrides = {}) {
     const defaults = {
-        fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace',
-        fontSize: 14,
+        // Core rendering and behavior
+        fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace', // App default
+        fontSize: 13,                                                   // App default
+        fontWeight: 'normal',
+        fontWeightBold: 'bold',
+        lineHeight: 1.0,
+        letterSpacing: 0,
+        allowTransparency: false,
+        customGlyphs: true,
+        drawBoldTextInBrightColors: true,
+        devicePixelRatio: window.devicePixelRatio || 1,
+
+        // Cursor style and behavior
+        cursorStyle: 'underline',           // App override (valid)
+        cursorBlink: false,             // App default
+        cursorInactiveStyle: 'none',    // App default
+        cursorWidth: 1,
+        cursorAccent: '#650928ff',        // Moved from theme as per some versions, but theme is standard
+
+        // Scrolling
+        scrollback: 1000,
+        scrollSensitivity: 1,
+        fastScrollSensitivity: 5,
+        scrollOnUserInput: true,
+        scrollOnEraseInDisplay: false,
+        smoothScrollDuration: 0,
+
+        // Input and interaction
+        disableStdin: false,
+        convertEol: true,               // App override
+        tabStopWidth: 8,
+        wordSeparator: ' ()[]{}\'',
+        rightClickSelectsWord: true,
+        altClickMovesCursor: true,
+        macOptionIsMeta: false,
+        macOptionClickForcesSelection: false,
+        ignoreBracketedPasteMode: false,
+
+        // Accessibility and Integration
+        screenReaderMode: false,
+        minimumContrastRatio: 1,
+        allowProposedApi: true,         // App default
+        logLevel: 'info',
+
+
+
+        // Theme (standard xterm.js defaults unless overridden)
         theme: {
             foreground: '#F8F8F8',
-            background: '#1e1e1e', // Fallback, usually overridden by CSS or app logic
+            background: '#1e1e1e', // Fallback
             selectionBackground: '#264f78',
-            cursor: '#d4d4d4',
+            cursor: '#e9459caf',   // App override (transparent)
             cursorAccent: '#1e1e1e',
             black: '#1E1E1D',
             brightBlack: '#262625',
@@ -31,11 +76,6 @@ export function getTerminalOptions(overrides = {}) {
             white: '#F8F8F8',
             brightWhite: '#FFFFFF'
         },
-        cursorStyle: 'none', // Hide cursor by default
-        cursorBlink: false,
-        cursorInactiveStyle: 'none', // Hide cursor when blurred
-        convertEol: true,
-        allowProposedApi: true,
     }
 
     // Deep merge for theme if it exists in overrides

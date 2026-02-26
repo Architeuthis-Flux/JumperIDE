@@ -788,7 +788,7 @@ export async function runCurrentFile() {
     if (!port) return;
 
     if (isInRunMode) {
-        await port.write('\r\x03\x03')   // Ctrl-C twice: interrupt any running program
+        await port.write('\x03')
         return
     }
 
@@ -797,16 +797,17 @@ export async function runCurrentFile() {
         return
     }
 
+    const btnRunIcon = QID('btn-run-icon')
+    if (btnRunIcon.src) btnRunIcon.src = 'assets/iconStop1024.png'
+    else btnRunIcon.classList.replace('fa-circle-play', 'fa-circle-stop')
+    isInRunMode = true
+
     term.write('\r\n')
 
     const soft_reboot = false
     const timeout = -1
     const raw = await MpRawMode.begin(port, soft_reboot)
     try {
-        const btnRunIcon = QID('btn-run-icon')
-        if (btnRunIcon.src) btnRunIcon.src = 'assets/iconStop1024.png'
-        else btnRunIcon.classList.replace('fa-circle-play', 'fa-circle-stop')
-        isInRunMode = true
         const emit = true
         await sleep(10)
         await raw.exec(editor.state.doc.toString(), timeout, emit)
@@ -824,7 +825,6 @@ export async function runCurrentFile() {
     } finally {
         port.emit = false
         await raw.end()
-        const btnRunIcon = QID('btn-run-icon')
         if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
         else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
         isInRunMode = false

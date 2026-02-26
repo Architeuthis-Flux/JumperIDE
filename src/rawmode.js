@@ -60,6 +60,7 @@ export class MpRawMode {
     async interruptProgram(timeout=20000) {
         const endTime = Date.now() + timeout
         while (timeout <= 0 || (Date.now() < endTime)) {
+            console.log("Interrupting program")
             await this.port.write('\x03')   // Ctrl-C: interrupt any running program
             try {
                 let banner = await this.port.readUntil(replPrompts, 500)
