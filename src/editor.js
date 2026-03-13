@@ -11,7 +11,8 @@ import { EditorView, ViewPlugin, keymap, Decoration, MatchDecorator } from '@cod
 import { EditorState, RangeSetBuilder, Prec, StateEffect } from '@codemirror/state'
 import { StreamLanguage, indentUnit, syntaxTree } from '@codemirror/language'
 import { indentWithTab } from '@codemirror/commands'
-import { python } from '@codemirror/lang-python'
+import { python, pythonLanguage } from '@codemirror/lang-python'
+import { completeFromList } from '@codemirror/autocomplete'
 import { json as modeJSON, jsonParseLinter } from '@codemirror/lang-json'
 import { markdown as modeMD } from '@codemirror/lang-markdown'
 import { simpleMode } from '@codemirror/legacy-modes/mode/simple-mode'
@@ -175,6 +176,31 @@ function buildJumperlessRegex() {
 }
 
 const jumperlessRegex = buildJumperlessRegex();
+
+const jumperlessAutocompleteOptions = API_REF_SYMBOLS.map((name) => ({
+  label: name,
+  type: "function",
+  detail: "jumperless",
+}));
+
+const jumperlessAutocomplete = completeFromList(jumperlessAutocompleteOptions);
+
+function jumperlessCompletionSource(context) {
+  const word = context.matchBefore(/[\w.]*/);
+  if (!word || (word.from === word.to && !context.explicit)) {
+    return null;
+  }
+
+  const result = jumperlessAutocomplete(context);
+  if (!result) {
+    return null;
+  }
+
+  return {
+    ...result,
+    from: word.from,
+  };
+}
 
 function isInCommentOrString(view, pos) {
   const tree = syntaxTree(view.state);
@@ -424,6 +450,7 @@ export async function createNewEditor(editorElement, fn, content, options) {
         mode = [
             // TODO: detect indent of existing content
             indentUnit.of('    '), python(),
+            pythonLanguage.data.of({ autocomplete: jumperlessCompletionSource }),
             jumperlessPythonExtensions,
             ruff && ruffLinter(ruff),
             mpyCrossLinter,

@@ -8,6 +8,7 @@ import serve from 'rollup-plugin-serve'
 import sourcemaps from 'rollup-plugin-sourcemaps2';
 import fs from 'fs'
 import path from 'path'
+import process from 'node:process'
 import { execSync } from 'child_process'
 
 // Regenerate API ref headings/symbols from docs before build
