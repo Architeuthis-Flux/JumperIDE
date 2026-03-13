@@ -30,5 +30,9 @@ export default [
   {
     files: ["scripts/**/*.js"],
     languageOptions: { globals: globals.node },
-  }
+  },
+  {
+    files: ["src/api_ref_help_overrides.js"],
+    languageOptions: { globals: globals.node },
+  },
 ]
