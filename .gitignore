@@ -1,7 +1,9 @@
 build/
 fw/
 node_modules/
-src/generated/
+src/generated/*
+!src/generated/
+!src/generated/api_ref_data.js
 .parcel-cache/
 extra/
 src/tools_vfs/lib/python_minifier/
