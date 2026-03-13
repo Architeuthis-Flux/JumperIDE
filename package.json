@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "rollup --config",
-    "start": "rollup --config --configDebug --watch"
+    "start": "rollup --config --configDebug --watch",
+    "check:api-ref": "node scripts/check-api-ref-data.js"
   },
   "dependencies": {
     "@astral-sh/ruff-wasm-web": "0.9.9",

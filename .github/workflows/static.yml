@@ -38,10 +38,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check generated API ref symbols
+        run: npm run check:api-ref
+
       - name: Install Python build dependency
         run: pip install requests
 
       - name: Build
+        env:
+          SKIP_API_REF_GENERATE: "1"
         run: python3 build.py
 
       - name: Setup Pages

@@ -11,10 +11,18 @@ import path from 'path'
 import { execSync } from 'child_process'
 
 // Regenerate API ref headings/symbols from docs before build
-try {
-  execSync('node scripts/generate-api-ref-data.js', { stdio: 'inherit' })
-} catch (_) {
-  // proceed without regenerating if script or API ref md missing
+const skipApiRefGeneration = process.env.SKIP_API_REF_GENERATE === '1' || process.env.CI === 'true'
+if (!skipApiRefGeneration) {
+  try {
+    execSync('node scripts/generate-api-ref-data.js', { stdio: 'inherit' })
+  } catch (err) {
+    console.warn('[rollup] API ref generation failed; continuing with checked-in src/generated/api_ref_data.js')
+    if (process.env.VERBOSE === '1' && err?.message) {
+      console.warn(err.message)
+    }
+  }
+} else {
+  console.log('[rollup] Skipping API ref generation (CI or SKIP_API_REF_GENERATE=1)')
 }
 
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
