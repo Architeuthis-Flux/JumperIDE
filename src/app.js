@@ -39,6 +39,7 @@ import { getTerminalOptions } from './terminal_utils.js'
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
 import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin } from './oled_bin_viewer.js'
+import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, getUserUID, getScreenInfo, IdleMonitor,
          getCssPropertyValue, QSA, QS, QID, iOS, sanitizeHTML, isRunningStandalone,
@@ -670,9 +671,13 @@ async function _loadContent(fn, content, editorElement) {
             if (update.docChanged) {
                 QS(`#menu-file-tree [data-fn="${fn}"]`).classList.add("changed")
             }
-            if (update.selectionSet && QID('api-ref-go-to-clicked')?.checked && !QID('api-ref-panel')?.classList.contains('collapsed')) {
+            const isPointerSelection = update.selectionSet && update.transactions.some((tr) => {
+                const userEvent = tr.annotation(Transaction.userEvent)
+                return typeof userEvent === 'string' && userEvent.startsWith('select.pointer')
+            })
+            if (isPointerSelection && QID('api-ref-go-to-clicked')?.checked && !QID('api-ref-panel')?.classList.contains('collapsed')) {
                 if (apiRefGoToClickedDebounce) clearTimeout(apiRefGoToClickedDebounce)
-                apiRefGoToClickedDebounce = setTimeout(() => syncApiRefToClicked(editor), 250)
+                apiRefGoToClickedDebounce = setTimeout(() => syncApiRefToClicked(editor), 500)
             }
         })
 
@@ -1053,7 +1058,7 @@ let apiRefPendingScrollAnchor = null
 let apiRefPendingSearchText = null
 let apiRefLastScrollKey = ''
 let apiRefLastScrollTime = 0
-const API_REF_SCROLL_COOLDOWN_MS = 250
+const API_REF_SCROLL_COOLDOWN_MS = 500
 
 const API_REF_OUR_DOCS_ORIGIN = 'https://docs.jumperless.org'
 const API_REF_MICROPYTHON_ORIGIN = 'https://docs.micropython.org'

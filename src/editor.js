@@ -7,8 +7,8 @@
  */
 
 import { basicSetup } from 'codemirror'
-import { EditorView, ViewPlugin, keymap, Decoration, MatchDecorator } from '@codemirror/view'
-import { EditorState, RangeSetBuilder, Prec, StateEffect } from '@codemirror/state'
+import { EditorView, ViewPlugin, keymap, Decoration, MatchDecorator, showTooltip } from '@codemirror/view'
+import { EditorState, RangeSetBuilder, Prec, StateEffect, StateField } from '@codemirror/state'
 import { StreamLanguage, indentUnit, syntaxTree } from '@codemirror/language'
 import { indentWithTab } from '@codemirror/commands'
 import { python, pythonLanguage } from '@codemirror/lang-python'
@@ -19,7 +19,8 @@ import { simpleMode } from '@codemirror/legacy-modes/mode/simple-mode'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { monokaiInit } from '@uiw/codemirror-theme-monokai'
 import { tags } from '@lezer/highlight'
-import { API_REF_SYMBOLS } from './generated/api_ref_data.js'
+import { API_REF_ARG_HELP, API_REF_DESCRIPTIONS, API_REF_HEADINGS, API_REF_HIDDEN_SYMBOLS, API_REF_SYMBOLS } from './generated/api_ref_data.js'
+import { JUMPERLESS_ANCHORS } from './apiRefMicroPython.js'
 import { linter } from '@codemirror/lint'
 
 import { validatePython, getRuffWorkspace } from './python_utils.js'
@@ -177,11 +178,289 @@ function buildJumperlessRegex() {
 
 const jumperlessRegex = buildJumperlessRegex();
 
-const jumperlessAutocompleteOptions = API_REF_SYMBOLS.map((name) => ({
-  label: name,
-  type: "function",
-  detail: "jumperless",
-}));
+function buildJumperlessSignatureMap() {
+  const signatures = new Map();
+  for (const heading of API_REF_HEADINGS) {
+    const openParen = heading.indexOf("(");
+    if (openParen <= 0) {
+      continue;
+    }
+    const name = heading.slice(0, openParen).trim();
+    signatures.set(name, heading);
+  }
+  return signatures;
+}
+
+const JUMPERLESS_SIGNATURES = buildJumperlessSignatureMap();
+const JUMPERLESS_HIDDEN_HELP = new Set((API_REF_HIDDEN_SYMBOLS || []).map((s) => normalizeJumperlessSymbol(s)));
+
+function normalizeJumperlessSymbol(name) {
+  return String(name || "").toLowerCase().replace(/-/g, "_");
+}
+
+function normalizeJumperlessArgName(name) {
+  let arg = String(name || "").trim();
+  arg = arg.replace(/^\[+/, "").replace(/\]+$/, "");
+  const eq = arg.indexOf("=");
+  if (eq >= 0) {
+    arg = arg.slice(0, eq);
+  }
+  return arg.trim();
+}
+
+function parseSignatureArguments(signature) {
+  const open = signature.indexOf("(");
+  const close = signature.lastIndexOf(")");
+  if (open < 0 || close <= open) {
+    return [];
+  }
+  const argsRaw = signature.slice(open + 1, close).trim();
+  if (!argsRaw) {
+    return [];
+  }
+  return argsRaw.split(",").map((arg) => arg.trim()).filter(Boolean);
+}
+
+function resolveJumperlessSignature(name) {
+  if (JUMPERLESS_HIDDEN_HELP.has(normalizeJumperlessSymbol(name))) {
+    return null;
+  }
+  const direct = JUMPERLESS_SIGNATURES.get(name);
+  if (direct) {
+    return direct;
+  }
+  const anchor = JUMPERLESS_ANCHORS[name] || JUMPERLESS_ANCHORS[name.toLowerCase()];
+  if (!anchor) {
+    return null;
+  }
+  const canonical = JUMPERLESS_SIGNATURES.get(anchor);
+  if (!canonical) {
+    return null;
+  }
+  const canonicalTail = canonical.slice(anchor.length);
+  return `${name}${canonicalTail}`;
+}
+
+function resolveJumperlessDescription(name) {
+  if (JUMPERLESS_HIDDEN_HELP.has(normalizeJumperlessSymbol(name))) {
+    return null;
+  }
+  const direct = API_REF_DESCRIPTIONS[normalizeJumperlessSymbol(name)];
+  if (direct) {
+    return direct;
+  }
+  const anchor = JUMPERLESS_ANCHORS[name] || JUMPERLESS_ANCHORS[normalizeJumperlessSymbol(name)];
+  if (!anchor) {
+    return null;
+  }
+  return API_REF_DESCRIPTIONS[normalizeJumperlessSymbol(anchor)] || null;
+}
+
+function resolveJumperlessArgHelp(name) {
+  if (JUMPERLESS_HIDDEN_HELP.has(normalizeJumperlessSymbol(name))) {
+    return null;
+  }
+  const direct = API_REF_ARG_HELP[normalizeJumperlessSymbol(name)];
+  if (direct && typeof direct === "object") {
+    return direct;
+  }
+  const anchor = JUMPERLESS_ANCHORS[name] || JUMPERLESS_ANCHORS[normalizeJumperlessSymbol(name)];
+  if (!anchor) {
+    return null;
+  }
+  const canonical = API_REF_ARG_HELP[normalizeJumperlessSymbol(anchor)];
+  return (canonical && typeof canonical === "object") ? canonical : null;
+}
+
+function getJumperlessSignatureContext(state, pos) {
+  if (pos <= 0 || isInCommentOrStringState(state, pos)) {
+    return null;
+  }
+
+  const text = state.sliceDoc(0, pos);
+  let parenDepth = 0;
+  let openPos = -1;
+  for (let i = text.length - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === ")") {
+      parenDepth += 1;
+    } else if (ch === "(") {
+      if (parenDepth === 0) {
+        openPos = i;
+        break;
+      }
+      parenDepth -= 1;
+    }
+  }
+
+  if (openPos < 0) {
+    return null;
+  }
+
+  let j = openPos - 1;
+  while (j >= 0 && /\s/.test(text[j])) {
+    j--;
+  }
+  if (j < 0) {
+    return null;
+  }
+
+  let start = j;
+  while (start >= 0 && /[\w.]/.test(text[start])) {
+    start--;
+  }
+  const name = text.slice(start + 1, j + 1);
+  if (!name || !JUMPERLESS_FUNCTIONS.has(name)) {
+    return null;
+  }
+  if (JUMPERLESS_HIDDEN_HELP.has(normalizeJumperlessSymbol(name))) {
+    return null;
+  }
+
+  let argDepth = 0;
+  let argIndex = 0;
+  for (let i = openPos + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(" || ch === "[" || ch === "{") {
+      argDepth += 1;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      if (argDepth > 0) {
+        argDepth -= 1;
+      }
+    } else if (ch === "," && argDepth === 0) {
+      argIndex += 1;
+    }
+  }
+
+  const signature = resolveJumperlessSignature(name) || `${name}(...)`;
+  const description = resolveJumperlessDescription(name);
+  const signatureArgs = parseSignatureArguments(signature);
+  const currentArg = signatureArgs[argIndex] || null;
+  const currentArgName = currentArg ? normalizeJumperlessArgName(currentArg) : null;
+  const argHelpMap = resolveJumperlessArgHelp(name);
+  const currentArgHelp = (currentArgName && argHelpMap)
+    ? (argHelpMap[currentArgName] || argHelpMap[normalizeJumperlessArgName(currentArgName)] || null)
+    : null;
+  return { name, signature, argIndex, openPos, description, currentArgName, currentArgHelp };
+}
+
+function createSignatureDom(signature, argIndex, description, currentArgName, currentArgHelp) {
+  const dom = document.createElement("div");
+  dom.className = "cm-jumperless-signature-tooltip";
+
+  const open = signature.indexOf("(");
+  const close = signature.lastIndexOf(")");
+  if (open < 0 || close < open) {
+    dom.textContent = signature;
+    return dom;
+  }
+
+  const fn = signature.slice(0, open + 1);
+  const argsRaw = signature.slice(open + 1, close);
+  const tail = signature.slice(close);
+  const args = argsRaw.length ? argsRaw.split(",").map((s) => s.trim()) : [];
+
+  const fnNode = document.createElement("span");
+  fnNode.textContent = fn;
+  dom.appendChild(fnNode);
+
+  args.forEach((arg, i) => {
+    if (i > 0) {
+      dom.appendChild(document.createTextNode(", "));
+    }
+    const argNode = document.createElement("span");
+    argNode.textContent = arg;
+    if (i === argIndex) {
+      argNode.className = "cm-jumperless-signature-active-arg";
+    }
+    dom.appendChild(argNode);
+  });
+
+  const tailNode = document.createElement("span");
+  tailNode.textContent = tail;
+  dom.appendChild(tailNode);
+
+  if (description) {
+    const descNode = document.createElement("div");
+    descNode.className = "cm-jumperless-signature-description";
+    descNode.textContent = description;
+    dom.appendChild(descNode);
+  }
+
+  if (currentArgHelp) {
+    const argHelpNode = document.createElement("div");
+    argHelpNode.className = "cm-jumperless-signature-arg-help";
+    argHelpNode.textContent = currentArgName ? `${currentArgName}: ${currentArgHelp}` : currentArgHelp;
+    dom.appendChild(argHelpNode);
+  }
+
+  return dom;
+}
+
+function buildJumperlessSignatureTooltip(state) {
+  const sel = state.selection.main;
+  if (!sel.empty) {
+    return null;
+  }
+  const ctx = getJumperlessSignatureContext(state, sel.head);
+  if (!ctx) {
+    return null;
+  }
+
+  return {
+    pos: ctx.openPos + 1,
+    above: true,
+    strictSide: false,
+    create: () => ({ dom: createSignatureDom(
+      ctx.signature,
+      ctx.argIndex,
+      ctx.description,
+      ctx.currentArgName,
+      ctx.currentArgHelp
+    ) }),
+  };
+}
+
+const jumperlessSignatureField = StateField.define({
+  create: buildJumperlessSignatureTooltip,
+  update(value, tr) {
+    if (tr.docChanged || tr.selection) {
+      return buildJumperlessSignatureTooltip(tr.state);
+    }
+    return value;
+  },
+  provide: (field) => showTooltip.from(field),
+});
+
+const jumperlessFunctionOptions = API_REF_SYMBOLS
+  .filter((name) => !JUMPERLESS_HIDDEN_HELP.has(normalizeJumperlessSymbol(name)))
+  .map((name) => {
+  const signature = resolveJumperlessSignature(name);
+  const description = resolveJumperlessDescription(name);
+  const infoParts = [];
+  if (signature) infoParts.push(signature);
+  if (description) infoParts.push(description);
+  return {
+    label: name,
+    type: "function",
+    detail: signature ? signature.slice(name.length) : "jumperless",
+    info: infoParts.length ? infoParts.join("\n\n") : "Jumperless function",
+  };
+});
+
+const jumperlessConstantOptions = [...JUMPERLESS_CONSTANTS]
+  .sort((a, b) => a.localeCompare(b))
+  .map((name) => ({
+    label: name,
+    type: "constant",
+    detail: "jumperless",
+    info: "Jumperless constant",
+  }));
+
+const jumperlessAutocompleteOptions = [
+  ...jumperlessFunctionOptions,
+  ...jumperlessConstantOptions,
+];
 
 const jumperlessAutocomplete = completeFromList(jumperlessAutocompleteOptions);
 
@@ -202,8 +481,8 @@ function jumperlessCompletionSource(context) {
   };
 }
 
-function isInCommentOrString(view, pos) {
-  const tree = syntaxTree(view.state);
+function isInCommentOrStringState(state, pos) {
+  const tree = syntaxTree(state);
   let node = tree.resolveInner(pos);
   while (node) {
     const name = node.type.name.toLowerCase();
@@ -213,6 +492,10 @@ function isInCommentOrString(view, pos) {
     node = node.parent;
   }
   return false;
+}
+
+function isInCommentOrString(view, pos) {
+  return isInCommentOrStringState(view.state, pos);
 }
 
 const jumperlessView = ViewPlugin.fromClass(class {
@@ -247,12 +530,44 @@ const jumperlessView = ViewPlugin.fromClass(class {
 
 const jumperlessPythonExtensions = [
   Prec.highest(jumperlessView.extension),
+  jumperlessSignatureField,
   EditorView.theme({
     ".cm-jumperless-function": {
       color: "#ff79c6",
     },
     ".cm-jumperless-constant": {
       color: "#bd93f9",
+    },
+    ".cm-jumperless-signature-tooltip": {
+      backgroundColor: "#1f2030",
+      color: "#f8f8f2",
+      border: "1px solid #6272a4",
+      borderRadius: "6px",
+      padding: "4px 8px",
+      fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace',
+      fontSize: "0.9em",
+      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.35)",
+    },
+    ".cm-jumperless-signature-active-arg": {
+      color: "#50fa7b",
+      fontWeight: "700",
+      textDecoration: "underline",
+    },
+    ".cm-jumperless-signature-description": {
+      marginTop: "4px",
+      color: "#c9d0ff",
+      fontSize: "0.9em",
+      maxWidth: "420px",
+      whiteSpace: "normal",
+    },
+    ".cm-jumperless-signature-arg-help": {
+      marginTop: "4px",
+      color: "#8be9fd",
+      fontSize: "0.9em",
+      maxWidth: "420px",
+      whiteSpace: "normal",
+      borderTop: "1px solid #44475a",
+      paddingTop: "4px",
     },
   }),
 ];

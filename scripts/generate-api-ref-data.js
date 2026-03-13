@@ -4,11 +4,11 @@
  * 1) MicroPython API reference markdown (### `name(params)`)
  * 2) C source of truth: modjumperless.c jumperless_module_globals_table + module_stubs.c
  * 3) jumperless_module.py re-exports (functions + aliases)
- * Generates: src/generated/api_ref_data.js (headings array + symbol list for app.js and editor.js)
+ * Generates: src/generated/api_ref_data.js (headings, descriptions, arg help, symbols)
  *
  * Usage: node scripts/generate-api-ref-data.js [path-to-09.5-micropythonAPIreference.md]
  * Default API ref: ../../Jumperless-docs/docs/09.5-micropythonAPIreference.md
- * Set API_REF_MD, JUMPERLESS_MOD_C, JUMPERLESS_MODULE_PY for custom paths.
+ * Set API_REF_MD, JUMPERLESS_MOD_C, JUMPERLESS_MODULE_PY, API_REF_OVERRIDES for custom paths.
  */
 
 const fs = require('fs')
@@ -21,6 +21,7 @@ const outFile = path.join(outDir, 'api_ref_data.js')
 
 const base = path.join(__dirname, '..')
 const parent = path.join(__dirname, '..', '..')
+const overridesPath = process.env.API_REF_OVERRIDES || path.join(base, 'src', 'api_ref_help_overrides.js')
 
 function modCCandidates() {
   const env = (process.env.JUMPERLESS_MOD_C || '').trim()
@@ -86,6 +87,155 @@ function extractHeadings(content) {
   return headings
 }
 
+function extractFirstDescriptionLine(sectionBody) {
+  const withoutCode = sectionBody.replace(/```[\s\S]*?```/g, '\n')
+  const lines = withoutCode.split('\n')
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('<!--')) continue
+    if (/^[-*+]\s/.test(line)) continue
+    if (/^\d+\.\s/.test(line)) continue
+    if (/^>\s/.test(line)) continue
+    if (/^\|/.test(line)) continue
+    if (/^#{1,6}\s/.test(line)) continue
+    if (/^`/.test(line)) continue
+    return line.replace(/\s+/g, ' ')
+  }
+  return ''
+}
+
+function normalizeSymbol(name) {
+  return String(name || '').toLowerCase().replace(/-/g, '_')
+}
+
+function normalizeArgName(name) {
+  let arg = String(name || '').trim()
+  arg = arg.replace(/^\[+/, '').replace(/\]+$/, '')
+  const eq = arg.indexOf('=')
+  if (eq >= 0) arg = arg.slice(0, eq)
+  return arg.trim()
+}
+
+function mergeArgHelp(baseArgHelp, overrideArgHelp) {
+  const merged = {}
+  for (const [symbol, args] of Object.entries(baseArgHelp || {})) {
+    merged[symbol] = { ...args }
+  }
+  for (const [symbol, args] of Object.entries(overrideArgHelp || {})) {
+    const key = normalizeSymbol(symbol)
+    if (!key || !args || typeof args !== 'object') continue
+    merged[key] = { ...(merged[key] || {}), ...args }
+  }
+  return merged
+}
+
+function loadOverrides() {
+  if (!fs.existsSync(overridesPath)) {
+    return { descriptions: {}, argHelp: {}, remove: [] }
+  }
+  try {
+    delete require.cache[require.resolve(overridesPath)]
+    const raw = require(overridesPath)
+    const descriptions = raw && raw.descriptions && typeof raw.descriptions === 'object' ? raw.descriptions : {}
+    const argHelp = raw && raw.argHelp && typeof raw.argHelp === 'object' ? raw.argHelp : {}
+    const remove = Array.isArray(raw && raw.remove) ? raw.remove : []
+    const normalizedDescriptions = {}
+    for (const [symbol, desc] of Object.entries(descriptions)) {
+      if (typeof desc !== 'string') continue
+      normalizedDescriptions[normalizeSymbol(symbol)] = desc.trim()
+    }
+    return {
+      descriptions: normalizedDescriptions,
+      argHelp: mergeArgHelp({}, argHelp),
+      remove: [...new Set(remove.map(normalizeSymbol).filter(Boolean))]
+    }
+  } catch (err) {
+    if (process.env.CI !== 'true') {
+      console.warn('[generate-api-ref-data] Could not load overrides:', overridesPath, err.message)
+    }
+    return { descriptions: {}, argHelp: {}, remove: [] }
+  }
+}
+
+function extractHeadingDescriptions(content) {
+  const descriptions = {}
+  const matches = []
+  let m
+  const re = new RegExp(headingRe.source, 'gm')
+  while ((m = re.exec(content)) !== null) {
+    matches.push({
+      heading: m[1],
+      start: m.index,
+      end: re.lastIndex
+    })
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const current = matches[i]
+    const next = matches[i + 1]
+    const bodyEnd = next ? next.start : content.length
+    const body = content.slice(current.end, bodyEnd)
+    const desc = extractFirstDescriptionLine(body)
+    if (!desc) continue
+    descriptions[symbolFromHeading(current.heading)] = desc
+  }
+
+  return descriptions
+}
+
+function extractArgHelpFromSection(sectionBody) {
+  const argHelp = {}
+  const withoutCode = sectionBody.replace(/```[\s\S]*?```/g, '\n')
+  const lines = withoutCode.split('\n')
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    const m = line.match(/^[-*+]\s+(.+?)\s*:\s*(.+)$/)
+    if (!m) continue
+    const argSpec = m[1]
+    const desc = m[2].trim().replace(/\s+/g, ' ')
+    if (!desc) continue
+    const argNames = []
+    let argMatch
+    const argRe = /`([^`]+)`/g
+    while ((argMatch = argRe.exec(argSpec)) !== null) {
+      const arg = normalizeArgName(argMatch[1])
+      if (arg) argNames.push(arg)
+    }
+    if (argNames.length === 0) continue
+    for (const arg of argNames) {
+      argHelp[arg] = desc
+    }
+  }
+  return argHelp
+}
+
+function extractHeadingArgHelp(content) {
+  const argHelpBySymbol = {}
+  const matches = []
+  let m
+  const re = new RegExp(headingRe.source, 'gm')
+  while ((m = re.exec(content)) !== null) {
+    matches.push({
+      heading: m[1],
+      start: m.index,
+      end: re.lastIndex
+    })
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const current = matches[i]
+    const next = matches[i + 1]
+    const bodyEnd = next ? next.start : content.length
+    const body = content.slice(current.end, bodyEnd)
+    const argHelp = extractArgHelpFromSection(body)
+    if (Object.keys(argHelp).length === 0) continue
+    argHelpBySymbol[symbolFromHeading(current.heading)] = argHelp
+  }
+  return argHelpBySymbol
+}
+
 function symbolFromHeading(h) {
   const name = h.split('(')[0].trim()
   return name.toLowerCase().replace(/-/g, '_')
@@ -149,7 +299,13 @@ function main() {
   }
 
   const headings = mdContent ? extractHeadings(mdContent) : []
+  let descriptions = mdContent ? extractHeadingDescriptions(mdContent) : {}
+  let argHelp = mdContent ? extractHeadingArgHelp(mdContent) : {}
   const symbolSet = new Set(headings.map(symbolFromHeading))
+  const overrides = loadOverrides()
+  const hiddenSet = new Set(overrides.remove)
+  descriptions = { ...descriptions, ...overrides.descriptions }
+  argHelp = mergeArgHelp(argHelp, overrides.argHelp)
 
   const modC = resolveModC()
   if (modC) {
@@ -191,6 +347,24 @@ function main() {
  */
 
 export const API_REF_HEADINGS = ${JSON.stringify(headings, null, 2)}
+
+export const API_REF_DESCRIPTIONS = ${JSON.stringify(
+    Object.fromEntries(
+      Object.entries(descriptions).filter(([k]) => !hiddenSet.has(k))
+    ),
+    null,
+    2
+  )}
+
+export const API_REF_ARG_HELP = ${JSON.stringify(
+    Object.fromEntries(
+      Object.entries(argHelp).filter(([k]) => !hiddenSet.has(k))
+    ),
+    null,
+    2
+  )}
+
+export const API_REF_HIDDEN_SYMBOLS = ${JSON.stringify([...hiddenSet].sort(), null, 2)}
 
 export const API_REF_SYMBOLS = ${JSON.stringify(symbols, null, 2)}
 `
