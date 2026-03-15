@@ -2,6 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "jumperscripts",
   "compatibility_date": "2025-09-27",
+  "main": "cloudflare/script-registry-worker/src/index.js",
   "observability": {
     "enabled": true
   },
@@ -10,5 +11,11 @@
   },
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SCRIPTS",
+      "id": "0836c3ab1d4e4d6d8fffbbb6219aca4e"
+    }
   ]
 }

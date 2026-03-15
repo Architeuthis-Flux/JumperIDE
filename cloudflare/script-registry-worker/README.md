@@ -41,3 +41,14 @@ All responses are JSON. CORS allows `*`. Rate limit: 30 POST/PUT per minute per 
 7. **Cross-client:** From another browser or device (same deployed app URL), confirm the list shows the same scripts and that edits appear after refresh.
 
 8. **Errors:** Submit with empty "Your name" or "Description" and confirm a friendly validation message; hit rate limit (30+ uploads/edits in a minute) and confirm a "Too many requests" message.
+
+## Sync registry back into the repo
+
+To pull all uploaded scripts from the registry into `scripts/` so you can see them in the repo:
+
+```bash
+cd cloudflare/script-registry-worker
+node sync-registry-to-repo.js
+```
+
+Uses `REGISTRY_URL` from the environment if set (default: `https://jumperscripts.kevinc-af9.workers.dev`). Writes each script to `scripts/<name>.py` and keeps a `.registry-sync.json` manifest so the same script keeps the same filename on future syncs.
