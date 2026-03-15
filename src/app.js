@@ -41,7 +41,7 @@ import { UAParser } from 'ua-parser-js'
 import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin } from './oled_bin_viewer.js'
 import { Transaction } from '@codemirror/state'
 
-import { splitPath, sleep, fetchJSON, getUserUID, getScreenInfo, IdleMonitor,
+import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
          getCssPropertyValue, QSA, QS, QID, iOS, sanitizeHTML, isRunningStandalone,
          sizeFmt, indicateActivity, setupTabs, report } from './utils.js'
 
@@ -50,7 +50,8 @@ import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
 import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage,
+         faPen, faClockRotateLeft, faUpload
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
@@ -60,7 +61,8 @@ library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage)
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage,
+         faPen, faClockRotateLeft, faUpload)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -844,44 +846,264 @@ export async function runCurrentFile() {
  */
 
 const SCRIPT_INDEX_URL = 'https://docs.jumperless.org/scripts/index.json'
+// Set at build time via SCRIPT_REGISTRY_API_BASE env (default: https://jumperscripts.kevinc-af9.workers.dev)
+const SCRIPT_REGISTRY_API_BASE = __SCRIPT_REGISTRY_API_BASE__
 
 export async function loadScriptIndex() {
     const listEl = QID('menu-scripts-list')
     if (!listEl) return
     listEl.innerHTML = '<div class="title-lines">Loading…</div>'
     try {
-        const data = await fetchJSON(SCRIPT_INDEX_URL)
-        const scripts = data?.scripts || []
-        listEl.innerHTML = ''
-        if (scripts.length === 0) {
-            listEl.insertAdjacentHTML('beforeend', '<div class="title-lines">No scripts yet</div>')
-            return
+        if (SCRIPT_REGISTRY_API_BASE) {
+            await loadScriptIndexFromRegistry(listEl)
+        } else {
+            await loadScriptIndexFromStatic(listEl)
         }
-        for (const script of scripts) {
-            const name = script.name || 'Script'
-            const desc = script.description || ''
-            const url = script.url || ''
-            if (!url) continue
-            const safeName = name.replace(/"/g, '&quot;').replace(/</g, '&lt;')
-            const safeDesc = desc.replace(/"/g, '&quot;').replace(/</g, '&lt;')
-            const safeUrl = url.replace(/"/g, '&quot;')
-            listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-row" data-script-url="${safeUrl}" data-script-name="${safeName}">
-                <span><i class="fa-solid fa-file-code fa-fw menu-script-icon"></i> ${safeName}</span>
-                <a href="#" class="menu-action" title="Open in editor"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
-            </div>`)
-            if (safeDesc) listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-desc">${safeDesc}</div>`)
-        }
-        listEl.querySelectorAll('.menu-script-row').forEach(row => {
-            row.addEventListener('click', (e) => {
-                e.preventDefault()
-                const url = row.getAttribute('data-script-url')
-                const name = row.getAttribute('data-script-name')
-                if (url) openScriptFromUrl(url, name)
-            })
-        })
     } catch (err) {
         listEl.innerHTML = '<div class="title-lines">Failed to load scripts</div>'
         report('Script index load failed', err)
+    }
+}
+
+async function loadScriptIndexFromRegistry(listEl) {
+    const data = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts`)
+    const scripts = data?.scripts || []
+    listEl.innerHTML = ''
+    listEl.insertAdjacentHTML('beforeend', `
+        <div class="menu-script-row menu-script-upload-row">
+            <span><i class="fa-solid fa-upload fa-fw menu-script-icon"></i> Upload script</span>
+            <a href="#" class="menu-action" title="Upload current script to registry"><i class="fa-solid fa-plus fa-fw"></i></a>
+        </div>`)
+    listEl.querySelector('.menu-script-upload-row').addEventListener('click', (e) => {
+        e.preventDefault()
+        showScriptUploadModal()
+    })
+    if (scripts.length === 0) {
+        listEl.insertAdjacentHTML('beforeend', '<div class="title-lines">No scripts yet</div>')
+        return
+    }
+    for (const script of scripts) {
+        const name = script.name || 'Script'
+        const desc = script.description || ''
+        const author = script.authorName || ''
+        const id = script.id || ''
+        if (!id) continue
+        const safeName = name.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        const safeDesc = desc.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        const safeAuthor = author.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-row" data-script-id="${id}" data-script-name="${safeName}">
+            <span><i class="fa-solid fa-file-code fa-fw menu-script-icon"></i> ${safeName}</span>
+            <a href="#" class="menu-action menu-script-open" title="Open in editor"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
+            <a href="#" class="menu-action menu-script-edit" title="Edit script"><i class="fa-solid fa-pen fa-fw"></i></a>
+            <a href="#" class="menu-action menu-script-history" title="History"><i class="fa-solid fa-clock-rotate-left fa-fw"></i></a>
+        </div>`)
+        const descLine = safeDesc ? `<div class="menu-script-desc">${safeDesc}</div>` : ''
+        const authorLine = safeAuthor ? `<div class="menu-script-desc menu-script-author">by ${safeAuthor}</div>` : ''
+        listEl.insertAdjacentHTML('beforeend', descLine + authorLine)
+    }
+    listEl.querySelectorAll('.menu-script-row').forEach(row => {
+        const id = row.getAttribute('data-script-id')
+        const name = row.getAttribute('data-script-name')
+        row.querySelector('.menu-script-open')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openScriptFromRegistry(id, name) })
+        row.querySelector('.menu-script-edit')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openScriptEdit(id) })
+        row.querySelector('.menu-script-history')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openScriptHistory(id) })
+        row.addEventListener('click', (e) => { if (!e.target.closest('.menu-action')) openScriptFromRegistry(id, name) })
+    })
+}
+
+async function loadScriptIndexFromStatic(listEl) {
+    const data = await fetchJSON(SCRIPT_INDEX_URL)
+    const scripts = data?.scripts || []
+    listEl.innerHTML = ''
+    if (scripts.length === 0) {
+        listEl.insertAdjacentHTML('beforeend', '<div class="title-lines">No scripts yet</div>')
+        return
+    }
+    for (const script of scripts) {
+        const name = script.name || 'Script'
+        const desc = script.description || ''
+        const url = script.url || ''
+        if (!url) continue
+        const safeName = name.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        const safeDesc = desc.replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        const safeUrl = url.replace(/"/g, '&quot;')
+        listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-row" data-script-url="${safeUrl}" data-script-name="${safeName}">
+            <span><i class="fa-solid fa-file-code fa-fw menu-script-icon"></i> ${safeName}</span>
+            <a href="#" class="menu-action" title="Open in editor"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
+        </div>`)
+        if (safeDesc) listEl.insertAdjacentHTML('beforeend', `<div class="menu-script-desc">${safeDesc}</div>`)
+    }
+    listEl.querySelectorAll('.menu-script-row').forEach(row => {
+        row.addEventListener('click', (e) => {
+            e.preventDefault()
+            const url = row.getAttribute('data-script-url')
+            const name = row.getAttribute('data-script-name')
+            if (url) openScriptFromUrl(url, name)
+        })
+    })
+}
+
+export async function openScriptFromRegistry(id, suggestedName) {
+    if (!id || !SCRIPT_REGISTRY_API_BASE) return
+    try {
+        const data = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}`)
+        const content = data.content ?? ''
+        const name = (data.name || suggestedName || 'script').trim()
+        const fn = name.endsWith('.py') ? name : name + '.py'
+        await _loadContent(fn, content, createTab(fn))
+    } catch (err) {
+        report('Open script failed', err)
+        toastr.error('Could not load script')
+    }
+}
+
+function openScriptEdit(id) {
+    if (!id || !SCRIPT_REGISTRY_API_BASE) return
+    showScriptEditModal(id)
+}
+
+function openScriptHistory(id) {
+    if (!id || !SCRIPT_REGISTRY_API_BASE) return
+    showScriptHistoryModal(id)
+}
+
+function getOrCreateScriptModalOverlay() {
+    let el = QID('script-registry-modal-overlay')
+    if (!el) {
+        el = document.createElement('div')
+        el.id = 'script-registry-modal-overlay'
+        el.style.display = 'none'
+        el.addEventListener('click', (e) => { if (e.target === el) closeScriptModal() })
+        document.body.appendChild(el)
+    }
+    return el
+}
+
+function closeScriptModal() {
+    const el = QID('script-registry-modal-overlay')
+    if (el) el.style.display = 'none'
+}
+
+function showScriptUploadModal() {
+    const overlay = getOrCreateScriptModalOverlay()
+    const content = editor ? editor.state.doc.toString() : ''
+    const suggestedName = editorFn ? editorFn.replace(/.*\//, '').replace(/\.py$/, '') || 'script' : 'script'
+    const safeName = (suggestedName || '').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+    overlay.innerHTML = `
+        <div id="script-registry-modal" class="script-registry-modal">
+            <h3>Upload script to registry</h3>
+            <div class="modal-body">
+                <label>Script name</label>
+                <input type="text" id="script-modal-name" value="${safeName}" placeholder="e.g. blink_led" maxlength="120">
+                <label>Your name</label>
+                <input type="text" id="script-modal-author" placeholder="Your name or nickname" maxlength="80" required>
+                <label>Description</label>
+                <input type="text" id="script-modal-desc" placeholder="What does this script do?" maxlength="500" required>
+                <label>Code</label>
+                <textarea id="script-modal-content" class="content-field" rows="12"></textarea>
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel">Cancel</button>
+                    <button type="button" class="primary btn-upload">Upload</button>
+                </div>
+            </div>
+        </div>`
+    overlay.querySelector('#script-modal-content').value = content
+    overlay.style.display = 'flex'
+    overlay.querySelector('.btn-cancel').onclick = closeScriptModal
+    overlay.querySelector('.btn-upload').onclick = async () => {
+        const name = overlay.querySelector('#script-modal-name').value.trim() || 'Untitled'
+        const authorName = overlay.querySelector('#script-modal-author').value.trim()
+        const description = overlay.querySelector('#script-modal-desc').value.trim()
+        const bodyContent = overlay.querySelector('#script-modal-content').value
+        if (!authorName) { toastr.warning('Your name is required'); return }
+        if (!description) { toastr.warning('Description is required'); return }
+        try {
+            await postJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts`, { name, authorName, description, content: bodyContent })
+            toastr.success('Script uploaded')
+            closeScriptModal()
+            loadScriptIndex()
+        } catch (e) {
+            toastr.error(e.message || 'Upload failed')
+        }
+    }
+}
+
+async function showScriptEditModal(id) {
+    const overlay = getOrCreateScriptModalOverlay()
+    overlay.innerHTML = '<div id="script-registry-modal"><h3>Edit script</h3><div class="modal-body">Loading…</div></div>'
+    overlay.style.display = 'flex'
+    try {
+        const data = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}`)
+        const safe = (s) => (s ?? '').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+        overlay.querySelector('.modal-body').innerHTML = `
+            <label>Script name</label>
+            <input type="text" id="script-modal-name" value="${safe(data.name)}" maxlength="120">
+            <label>Your name</label>
+            <input type="text" id="script-modal-author" value="${safe(data.authorName)}" placeholder="Your name" maxlength="80" required>
+            <label>Description</label>
+            <input type="text" id="script-modal-desc" value="${safe(data.description)}" maxlength="500" required>
+            <label>Code</label>
+            <textarea id="script-modal-content" class="content-field" rows="12"></textarea>
+            <div class="modal-actions">
+                <button type="button" class="btn-cancel">Cancel</button>
+                <button type="button" class="primary btn-save">Save</button>
+            </div>`
+        overlay.querySelector('#script-modal-content').value = data.content ?? ''
+        overlay.querySelector('.btn-cancel').onclick = closeScriptModal
+        overlay.querySelector('.btn-save').onclick = async () => {
+            const name = overlay.querySelector('#script-modal-name').value.trim() || data.name
+            const authorName = overlay.querySelector('#script-modal-author').value.trim()
+            const description = overlay.querySelector('#script-modal-desc').value.trim()
+            const content = overlay.querySelector('#script-modal-content').value
+            if (!authorName) { toastr.warning('Your name is required'); return }
+            try {
+                await putJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}`, { name, authorName, description, content })
+                toastr.success('Script updated')
+                closeScriptModal()
+                loadScriptIndex()
+            } catch (e) {
+                toastr.error(e.message || 'Update failed')
+            }
+        }
+    } catch (e) {
+        overlay.querySelector('.modal-body').innerHTML = `<p>Failed to load: ${sanitizeHTML(e.message)}</p><button type="button" class="btn-cancel">Close</button>`
+        overlay.querySelector('.btn-cancel').onclick = closeScriptModal
+    }
+}
+
+async function showScriptHistoryModal(id) {
+    const overlay = getOrCreateScriptModalOverlay()
+    overlay.innerHTML = '<div id="script-registry-modal"><h3>Script history</h3><div class="modal-body">Loading…</div></div>'
+    overlay.style.display = 'flex'
+    try {
+        const data = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}/history`)
+        const revisions = data?.revisions || []
+        const listHtml = revisions.length
+            ? `<ul class="history-list">${revisions.map(r => `
+                <li>
+                    <span>${sanitizeHTML(r.updatedAt || '')} — ${sanitizeHTML(r.authorName || '')}${r.name ? ': ' + sanitizeHTML(r.name) : ''}</span>
+                    <button type="button" class="load-rev" data-revid="${(r.revId || '').replace(/"/g, '&quot;')}">Load</button>
+                </li>`).join('')}</ul>`
+            : '<p>No history yet.</p>'
+        overlay.querySelector('.modal-body').innerHTML = listHtml + '<div class="modal-actions"><button type="button" class="btn-cancel">Close</button></div>'
+        overlay.querySelector('.btn-cancel').onclick = closeScriptModal
+        overlay.querySelectorAll('.load-rev').forEach(btn => {
+            btn.onclick = async () => {
+                const revId = btn.getAttribute('data-revid')
+                if (!revId) return
+                try {
+                    const rev = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}/revisions/${revId}`)
+                    const fn = (rev.name || 'script').trim().endsWith('.py') ? (rev.name || 'script').trim() : (rev.name || 'script').trim() + '.py'
+                    await _loadContent(fn, rev.content ?? '', createTab(fn))
+                    closeScriptModal()
+                } catch (e) {
+                    toastr.error(e.message || 'Could not load revision')
+                }
+            }
+        })
+    } catch (e) {
+        overlay.querySelector('.modal-body').innerHTML = `<p>Failed to load history: ${sanitizeHTML(e.message)}</p><button type="button" class="btn-cancel">Close</button>`
+        overlay.querySelector('.btn-cancel').onclick = closeScriptModal
     }
 }
 

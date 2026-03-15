@@ -32,6 +32,36 @@ export async function fetchJSON(url) {
     return await response.json()
 }
 
+export async function postJSON(url, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+        const msg = data.error || response.statusText || String(response.status)
+        throw new Error(msg)
+    }
+    return data
+}
+
+export async function putJSON(url, body) {
+    const response = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+        const msg = data.error || response.statusText || String(response.status)
+        throw new Error(msg)
+    }
+    return data
+}
+
 export async function fetchArrayBuffer(url) {
     const response = await fetch(url, {cache: 'no-store'})
     if (!response.ok) { throw new Error(response.status) }

@@ -1,0 +1,15 @@
+name = "jumperide-script-registry"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Create with: npx wrangler kv namespace create SCRIPTS
+# Then add the returned id below (and preview_id for dev).
+[[kv_namespaces]]
+binding = "SCRIPTS"
+id = "0836c3ab1d4e4d6d8fffbbb6219aca4e"
+preview_id = "12975d69de3f42248c516a4c4cef5bd5"
+
+# Optional: lightweight rate limit (requests per minute per IP)
+# Not enforced if unset
+# [vars]
+# RATE_LIMIT_PER_MIN = "30"

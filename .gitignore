@@ -7,3 +7,10 @@ src/generated/*
 .parcel-cache/
 extra/
 src/tools_vfs/lib/python_minifier/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

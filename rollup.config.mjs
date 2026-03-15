@@ -83,6 +83,7 @@ const common = (args, name) => ({
       values: {
         VIPER_IDE_VERSION:  '"' + pkg.version + '"',
         VIPER_IDE_BUILD:    Date.now(),
+        __SCRIPT_REGISTRY_API_BASE__: JSON.stringify(process.env.SCRIPT_REGISTRY_API_BASE || 'https://jumperscripts.kevinc-af9.workers.dev'),
       }
     }),
     args.configDebug && sourcemaps(),
