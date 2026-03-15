@@ -28,6 +28,10 @@ async function fetchJSON(url) {
 }
 
 async function main() {
+    if (!fs.existsSync(SCRIPTS_DIR)) {
+        fs.mkdirSync(SCRIPTS_DIR, { recursive: true })
+    }
+
     console.log('Fetching script list from', REGISTRY_URL + '/scripts')
     const { scripts: list } = await fetchJSON(REGISTRY_URL + '/scripts')
     if (!Array.isArray(list) || list.length === 0) {
@@ -36,8 +40,11 @@ async function main() {
     }
 
     let idToFile = {}
+    let fileMeta = {}
     try {
-        idToFile = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')).idToFile || {}
+        const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'))
+        idToFile = manifest.idToFile || {}
+        fileMeta = manifest.fileMeta || {}
     } catch {
         // no manifest yet
     }
@@ -57,12 +64,17 @@ async function main() {
             existingFiles.add(filename)
         }
 
+        fileMeta[filename] = {
+            description: full.description ?? '',
+            authorName: full.authorName ?? '',
+        }
+
         const filePath = path.join(SCRIPTS_DIR, filename)
         fs.writeFileSync(filePath, content, 'utf8')
         console.log('  wrote', filename)
     }
 
-    fs.writeFileSync(MANIFEST_PATH, JSON.stringify({ idToFile }, null, 2) + '\n', 'utf8')
+    fs.writeFileSync(MANIFEST_PATH, JSON.stringify({ idToFile, fileMeta }, null, 2) + '\n', 'utf8')
     console.log('Synced', list.length, 'script(s) to', SCRIPTS_DIR)
 }
 

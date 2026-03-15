@@ -42,13 +42,30 @@ All responses are JSON. CORS allows `*`. Rate limit: 30 POST/PUT per minute per 
 
 8. **Errors:** Submit with empty "Your name" or "Description" and confirm a friendly validation message; hit rate limit (30+ uploads/edits in a minute) and confirm a "Too many requests" message.
 
-## Sync registry back into the repo
+## Sync registry ↔ repo
 
-To pull all uploaded scripts from the registry into `scripts/` so you can see them in the repo:
+**Registry → repo (see uploaded scripts locally)**  
+Pull all scripts from the registry into `scripts/`:
 
 ```bash
 cd cloudflare/script-registry-worker
 node sync-registry-to-repo.js
 ```
 
-Uses `REGISTRY_URL` from the environment if set (default: `https://jumperscripts.kevinc-af9.workers.dev`). Writes each script to `scripts/<name>.py` and keeps a `.registry-sync.json` manifest so the same script keeps the same filename on future syncs.
+Or from repo root: `node cloudflare/script-registry-worker/sync-registry-to-repo.js`
+
+- Uses `REGISTRY_URL` from the environment if set (default: `https://jumperscripts.kevinc-af9.workers.dev`).
+- Writes each script to `scripts/<name>.py` and stores a `.registry-sync.json` manifest (id → filename, and per-file description/author for push).
+- **Automatic:** The GitHub Action "Sync registry scripts" runs every 6 hours and on manual trigger (Actions tab); it runs this sync and commits changes so uploaded scripts appear in the repo.
+
+**Repo → registry (publish your edits)**  
+After editing `.py` files in `scripts/`, push those changes back to the registry:
+
+```bash
+cd cloudflare/script-registry-worker
+node push-repo-to-registry.js
+```
+
+- Only pushes files that are in `.registry-sync.json` (i.e. were previously synced from the registry).
+- Uses each script’s stored description/author from the manifest. If missing, set env: `AUTHOR_NAME="Your Name" DESCRIPTION="Short description"`.
+- Optional: `REGISTRY_URL=...` to point at a different registry.

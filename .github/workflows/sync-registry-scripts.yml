@@ -1,0 +1,40 @@
+# Pull scripts from the registry into the repo and commit so you can see/edit them locally.
+# Runs on schedule and can be triggered manually (Actions → Sync registry scripts → Run workflow).
+name: Sync registry scripts
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # needed to push commits
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Sync registry to repo
+        env:
+          REGISTRY_URL: "https://jumperscripts.kevinc-af9.workers.dev"
+        run: node cloudflare/script-registry-worker/sync-registry-to-repo.js
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cloudflare/script-registry-worker/scripts/
+          git diff --staged --quiet || (git commit -m "chore: sync scripts from registry" && git push)
