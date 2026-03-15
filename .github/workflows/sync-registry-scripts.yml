@@ -9,9 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  # needed to push commits
-  contents: write
+  contents: write  # read + push commits
 
 jobs:
   sync:
