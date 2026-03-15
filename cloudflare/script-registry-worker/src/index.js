@@ -61,7 +61,7 @@ async function checkRateLimit(env, ip, method) {
 }
 
 export default {
-    async fetch(request, env, ctx) {
+    async fetch(request, env, _ctx) {
         // Always return CORS so browser doesn't block; OPTIONS preflight
         if (request.method === 'OPTIONS') {
             return new Response(null, { status: 204, headers: CORS_HEADERS })

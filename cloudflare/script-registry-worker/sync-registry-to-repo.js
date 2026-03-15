@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * Fetches all scripts from the registry API and writes them into ./scripts/
  * so you can see uploaded scripts in the repo. Run from this directory:

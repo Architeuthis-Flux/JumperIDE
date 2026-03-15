@@ -847,6 +847,7 @@ export async function runCurrentFile() {
 
 const SCRIPT_INDEX_URL = 'https://docs.jumperless.org/scripts/index.json'
 // Set at build time via SCRIPT_REGISTRY_API_BASE env (default: https://jumperscripts.kevinc-af9.workers.dev)
+/* global __SCRIPT_REGISTRY_API_BASE__ */
 const SCRIPT_REGISTRY_API_BASE = __SCRIPT_REGISTRY_API_BASE__
 
 export async function loadScriptIndex() {

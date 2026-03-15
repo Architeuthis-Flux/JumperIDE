@@ -35,4 +35,9 @@ export default [
     files: ["src/api_ref_help_overrides.js"],
     languageOptions: { globals: globals.node },
   },
+  /* Cloudflare Worker + Node sync script */
+  {
+    files: ["cloudflare/script-registry-worker/**/*.js"],
+    languageOptions: { globals: { ...globals.node, ...globals.es2021 } },
+  },
 ]
