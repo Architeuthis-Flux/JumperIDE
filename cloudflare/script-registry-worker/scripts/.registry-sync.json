@@ -1,7 +1,8 @@
 {
   "idToFile": {
     "azd2il1upk6x": "interaction.py",
-    "64ft11homc5u": "print.py"
+    "64ft11homc5u": "print.py",
+    "9gdsv7oap3p6": "sevenseg.py"
   },
   "fileMeta": {
     "interaction.py": {
@@ -11,6 +12,10 @@
     "print.py": {
       "description": "nothing",
       "authorName": "Kevin"
+    },
+    "sevenseg.py": {
+      "description": "object for handling a single digit seven segment display",
+      "authorName": "Boatplugs"
     }
   }
 }
