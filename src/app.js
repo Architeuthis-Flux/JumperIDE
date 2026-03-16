@@ -897,6 +897,16 @@ const SCRIPT_REGISTRY_API_BASE = __SCRIPT_REGISTRY_API_BASE__
 export async function loadScriptIndex() {
     const listEl = QID('menu-scripts-list')
     if (!listEl) return
+    if (!window._registryRefreshWired) {
+        window._registryRefreshWired = true
+        const refreshBtn = QID('menu-scripts-refresh')
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', async () => {
+                await loadScriptIndex()
+                refreshBrowseOledImagesIfOpen()
+            })
+        }
+    }
     listEl.innerHTML = '<div class="title-lines">Loading…</div>'
     try {
         if (SCRIPT_REGISTRY_API_BASE) {

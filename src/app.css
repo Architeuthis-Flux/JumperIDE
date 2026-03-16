@@ -764,6 +764,31 @@ body.sidebar-resizing * {
     overscroll-behavior: none !important;
 }
 
+.menu-scripts-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.menu-scripts-header #menu-scripts-title {
+    margin-bottom: 0;
+}
+.menu-scripts-refresh {
+    padding: 4px 6px;
+    font-size: 0.85rem;
+    background: transparent;
+    border: none;
+    color: var(--fg-color);
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0.8;
+}
+.menu-scripts-refresh:hover {
+    opacity: 1;
+    background: var(--panel-bg, rgba(255,255,255,0.06));
+}
+
 #menu-file-title,
 #menu-pkg-title,
 #menu-scripts-title,
