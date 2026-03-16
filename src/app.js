@@ -50,7 +50,7 @@ import { faUsb, faBluetoothB } from '@fortawesome/free-brands-svg-icons'
 import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage,
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
          faPen, faClockRotateLeft, faUpload
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
@@ -61,7 +61,7 @@ library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
-         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage,
+         faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
          faPen, faClockRotateLeft, faUpload)
 library.add(faMessage, faCircleDown)
 dom.watch()
@@ -82,6 +82,10 @@ let isInRunMode = false
 let devInfo = null
 /** @type {Map<string, { getBytes: () => Uint8Array, setDirty: (boolean) => void, isDirty: () => boolean }>} */
 const oledBinViewers = new Map()
+/** When set, "Upload to registry" for this .bin tab overwrites the given registry image. Map<fn, { id, name, authorName, description }> */
+const registryEditForBin = new Map()
+/** When a .py tab was opened from the registry, maps fn -> script id so Edit modal can use editor content. */
+const registryScriptIdForFn = new Map()
 
 async function disconnectDevice() {
     if (port) {
@@ -352,6 +356,9 @@ export async function createNewOledBitmap() {
 /** Virtual tab name for the Image to OLED tool (opened in center editor, not a file). */
 export const IMAGE2OLED_TAB_FN = 'Image to OLED'
 
+/** Virtual tab name for the Browse OLED Images registry page. */
+export const BROWSE_OLED_IMAGES_TAB_FN = 'Browse OLED Images'
+
 /** Open the Image to OLED (image2cpp-style) tool in the center editor as a tab. Reuses existing tab if already open. */
 export function openImage2OledInEditor() {
     if (displayOpenFile(IMAGE2OLED_TAB_FN)) {
@@ -364,6 +371,32 @@ export function openImage2OledInEditor() {
     iframe.className = 'i2o-iframe i2o-iframe-editor'
     iframe.title = 'Image to OLED'
     editorElement.appendChild(iframe)
+}
+
+/** Open the Browse OLED Images registry page in the center editor as a tab. */
+export function openBrowseOledImagesInEditor() {
+    if (!SCRIPT_REGISTRY_API_BASE) return
+    if (displayOpenFile(BROWSE_OLED_IMAGES_TAB_FN)) {
+        return
+    }
+    const editorElement = createTab(BROWSE_OLED_IMAGES_TAB_FN)
+    editorElement.innerHTML = ''
+    const iframe = document.createElement('iframe')
+    iframe.src = `oled_images_browse.html?apiBase=${encodeURIComponent(SCRIPT_REGISTRY_API_BASE)}`
+    iframe.className = 'i2o-iframe i2o-iframe-editor'
+    iframe.title = 'Browse OLED Images'
+    editorElement.appendChild(iframe)
+}
+
+/** If the Browse OLED Images tab is open, tell its iframe to refresh the list. */
+function refreshBrowseOledImagesIfOpen() {
+    const tab = QS(`#editor-tabs [data-fn="${BROWSE_OLED_IMAGES_TAB_FN}"]`)
+    if (!tab) return
+    const pane = QS(`.editor-tab-pane[data-pane="${tab.dataset.tab}"]`)
+    const iframe = pane?.querySelector('iframe')
+    if (iframe?.contentWindow) {
+        iframe.contentWindow.postMessage({ type: 'jumperide-refresh-browse-images' }, '*')
+    }
 }
 
 /** Open file picker for PNG; convert to 128×32 OLED .bin and open in a new tab. */
@@ -627,6 +660,13 @@ async function _loadContent(fn, content, editorElement) {
                 onImportPng: () => importPngToOledBitmap(),
                 onPushFramebuffer: (fb) => sendOledFramebufferToDevice(fb)
             }
+            if (SCRIPT_REGISTRY_API_BASE) {
+                const overwrite = registryEditForBin.get(fn)
+                viewerOptions.onUploadToRegistry = () => {
+                    const v = oledBinViewers.get(fn)
+                    if (v) showOledImageUploadModal(v.getBytes(), fn.split('/').pop().replace(/\.bin$/, '') || 'bitmap', overwrite)
+                }
+            }
             const viewer = oledBinViewer(content, fn.split('/').pop(), editorElement, viewerOptions)
             if (viewer) {
                 oledBinViewers.set(fn, viewer)
@@ -689,7 +729,7 @@ async function _loadContent(fn, content, editorElement) {
 }
 
 export async function saveCurrentFile() {
-    if (editorFn === IMAGE2OLED_TAB_FN) return
+    if (editorFn === IMAGE2OLED_TAB_FN || editorFn === BROWSE_OLED_IMAGES_TAB_FN) return
     if (!port) return;
 
     if (!editor && oledBinViewers.has(editorFn)) {
@@ -701,6 +741,10 @@ export async function saveCurrentFile() {
             const viewer = oledBinViewers.get(oldFn)
             oledBinViewers.delete(oldFn)
             oledBinViewers.set(fn, viewer)
+            if (registryEditForBin.has(oldFn)) {
+                registryEditForBin.set(fn, registryEditForBin.get(oldFn))
+                registryEditForBin.delete(oldFn)
+            }
             editorFn = fn
             document.dispatchEvent(new CustomEvent('fileRenamed', { detail: { old: oldFn, new: fn } }))
         }
@@ -870,14 +914,31 @@ async function loadScriptIndexFromRegistry(listEl) {
     const data = await fetchJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts`)
     const scripts = data?.scripts || []
     listEl.innerHTML = ''
+    const isOled = editorFn && editorFn.endsWith('.bin')
+    const uploadLabel = isOled ? 'Upload OLED image' : 'Upload script to registry'
+    const uploadTitle = isOled ? 'Upload OLED .bin to registry' : 'Upload current script to registry'
     listEl.insertAdjacentHTML('beforeend', `
         <div class="menu-script-row menu-script-upload-row">
-            <span><i class="fa-solid fa-upload fa-fw menu-script-icon"></i> Upload script</span>
-            <a href="#" class="menu-action" title="Upload current script to registry"><i class="fa-solid fa-plus fa-fw"></i></a>
+            <span><i class="fa-solid fa-upload fa-fw menu-script-icon"></i> ${uploadLabel}</span>
+            <a href="#" class="menu-action" title="${uploadTitle}"><i class="fa-solid fa-plus fa-fw"></i></a>
         </div>`)
     listEl.querySelector('.menu-script-upload-row').addEventListener('click', (e) => {
         e.preventDefault()
-        showScriptUploadModal()
+        if (editorFn && editorFn.endsWith('.bin')) {
+            const viewer = oledBinViewers.get(editorFn)
+            const bytes = viewer ? viewer.getBytes() : null
+            const suggestedName = editorFn.split('/').pop().replace(/\.bin$/, '') || 'bitmap'
+            showOledImageUploadModal(bytes || undefined, suggestedName, registryEditForBin.get(editorFn) || undefined)
+        } else showScriptUploadModal()
+    })
+    listEl.insertAdjacentHTML('beforeend', `
+        <div class="menu-script-row menu-script-browse-images-row">
+            <span><i class="fa-solid fa-images fa-fw menu-script-icon"></i> Browse Images</span>
+            <a href="#" class="menu-action" title="Open registry images in editor"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i></a>
+        </div>`)
+    listEl.querySelector('.menu-script-browse-images-row').addEventListener('click', (e) => {
+        e.preventDefault()
+        openBrowseOledImagesInEditor()
     })
     if (scripts.length === 0) {
         listEl.insertAdjacentHTML('beforeend', '<div class="title-lines">No scripts yet</div>')
@@ -910,6 +971,21 @@ async function loadScriptIndexFromRegistry(listEl) {
         row.querySelector('.menu-script-history')?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openScriptHistory(id) })
         row.addEventListener('click', (e) => { if (!e.target.closest('.menu-action')) openScriptFromRegistry(id, name) })
     })
+}
+
+/** Update the single "Upload script / Upload OLED image" row label when the active tab changes. */
+function updateRegistryUploadRow() {
+    if (!SCRIPT_REGISTRY_API_BASE) return
+    const row = QID('menu-scripts-list')?.querySelector('.menu-script-upload-row')
+    if (!row) return
+    const isOled = editorFn && editorFn.endsWith('.bin')
+    const isEditingRegistry = isOled && registryEditForBin.has(editorFn)
+    const label = isOled ? (isEditingRegistry ? 'Overwrite image in registry' : 'Upload OLED image') : 'Upload script to registry'
+    const title = isOled ? (isEditingRegistry ? 'Overwrite this registry image' : 'Upload OLED .bin to registry') : 'Upload current script to registry'
+    const span = row.querySelector('span')
+    const link = row.querySelector('.menu-action')
+    if (span) span.innerHTML = `<i class="fa-solid fa-upload fa-fw menu-script-icon"></i> ${label}`
+    if (link) link.title = title
 }
 
 async function loadScriptIndexFromStatic(listEl) {
@@ -952,6 +1028,7 @@ export async function openScriptFromRegistry(id, suggestedName) {
         const name = (data.name || suggestedName || 'script').trim()
         const fn = name.endsWith('.py') ? name : name + '.py'
         await _loadContent(fn, content, createTab(fn))
+        registryScriptIdForFn.set(fn, id)
     } catch (err) {
         report('Open script failed', err)
         toastr.error('Could not load script')
@@ -1022,7 +1099,205 @@ function showScriptUploadModal() {
             await postJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts`, { name, authorName, description, content: bodyContent })
             toastr.success('Script uploaded')
             closeScriptModal()
-            loadScriptIndex()
+            await loadScriptIndex()
+        } catch (e) {
+            toastr.error(e.message || 'Upload failed')
+        }
+    }
+}
+
+/**
+ * Show modal to upload an OLED .bin image to the registry.
+ * @param {Uint8Array} [prefilledBytes] - When provided (e.g. from BIN editor), use these bytes; no file/tab choice.
+ * @param {string} [suggestedName] - Suggested name for the image (e.g. from filename).
+ * @param {{ id: string, name: string, authorName: string, description: string }|null} [overwrite] - When set, overwrite this registry image (edit mode); name "delete" removes it.
+ */
+function showOledImageUploadModal(prefilledBytes = null, suggestedName = '', overwrite = null) {
+    if (!SCRIPT_REGISTRY_API_BASE) return
+    const overlay = getOrCreateScriptModalOverlay()
+    const hasPrefilled = prefilledBytes && prefilledBytes.length > 0
+    const parsed = hasPrefilled ? parseOledBin(prefilledBytes) : null
+    const sizeNote = parsed ? ` (${parsed.width}×${parsed.height})` : ''
+    const namePlaceholder = overwrite ? (overwrite.name || 'Untitled') : (suggestedName || 'bitmap')
+    const authorPlaceholder = overwrite ? (overwrite.authorName || '') : ''
+    const safeName = (namePlaceholder || '').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+    const safeAuthor = (authorPlaceholder || '').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+    const modalTitle = overwrite ? 'Overwrite image in registry' : 'Upload OLED image to registry'
+
+    let sourceHtml = ''
+    if (hasPrefilled) {
+        sourceHtml = `<p class="oled-upload-note">Uploading current image${sizeNote}</p>`
+    } else {
+        const hasCurrentBin = editorFn && editorFn.endsWith('.bin') && oledBinViewers.get(editorFn)
+        if (hasCurrentBin) {
+            sourceHtml = `
+                <label>Source</label>
+                <div class="oled-upload-source">
+                    <button type="button" class="btn-use-current-bin">Use current .bin tab</button>
+                    <span>or</span>
+                    <input type="file" id="oled-modal-file" accept=".bin,application/octet-stream" style="display:none">
+                    <button type="button" class="btn-choose-bin">Choose .bin file</button>
+                </div>
+                <p class="oled-upload-chosen" id="oled-upload-chosen" style="display:none"></p>`
+        } else {
+            sourceHtml = `
+                <label>Source</label>
+                <div class="oled-upload-source">
+                    <input type="file" id="oled-modal-file" accept=".bin,application/octet-stream" style="display:none">
+                    <button type="button" class="btn-choose-bin">Choose .bin file</button>
+                </div>
+                <p class="oled-upload-chosen" id="oled-upload-chosen" style="display:none"></p>`
+        }
+    }
+
+    const saveModeHtml = overwrite ? `
+                <label class="oled-save-mode-label">Save as</label>
+                <div class="oled-save-mode-options">
+                    <label class="oled-save-mode-option"><input type="radio" name="oled-save-mode" value="overwrite" checked> Overwrite this image</label>
+                    <label class="oled-save-mode-option"><input type="radio" name="oled-save-mode" value="new"> Save as new copy</label>
+                </div>
+                <p class="oled-upload-note oled-upload-note-overwrite" id="oled-note-overwrite">Set name to "delete" to remove from registry.</p>
+                <p class="oled-upload-note oled-upload-note-new" id="oled-note-new" style="display:none">A new image will be added with the name and author below.</p>` : ''
+
+    overlay.innerHTML = `
+        <div id="script-registry-modal" class="script-registry-modal">
+            <h3>${overwrite ? 'Save image to registry' : modalTitle}</h3>
+            <div class="modal-body">
+                ${saveModeHtml}
+                ${sourceHtml}
+                <label>Image name</label>
+                <input type="text" id="oled-modal-name" value="${safeName}" placeholder="e.g. logo" maxlength="120">
+                <label>Your name</label>
+                <input type="text" id="oled-modal-author" value="${safeAuthor}" placeholder="Your name or nickname" maxlength="80" required>
+                <div class="modal-actions">
+                    <button type="button" class="btn-cancel">Cancel</button>
+                    <button type="button" class="primary btn-upload-oled">${overwrite ? 'Overwrite' : 'Upload'}</button>
+                </div>
+            </div>
+        </div>`
+    overlay.style.display = 'flex'
+
+    let chosenBytes = prefilledBytes ? new Uint8Array(prefilledBytes) : null
+
+    if (overwrite) {
+        const overwriteRadio = overlay.querySelector('input[value="overwrite"]')
+        const newRadio = overlay.querySelector('input[value="new"]')
+        const noteOverwrite = overlay.querySelector('#oled-note-overwrite')
+        const noteNew = overlay.querySelector('#oled-note-new')
+        const submitBtn = overlay.querySelector('.btn-upload-oled')
+        function updateOledSaveMode() {
+            const isNew = newRadio && newRadio.checked
+            if (noteOverwrite) noteOverwrite.style.display = isNew ? 'none' : 'block'
+            if (noteNew) noteNew.style.display = isNew ? 'block' : 'none'
+            if (submitBtn) submitBtn.textContent = isNew ? 'Upload' : 'Overwrite'
+        }
+        if (overwriteRadio) overwriteRadio.addEventListener('change', updateOledSaveMode)
+        if (newRadio) newRadio.addEventListener('change', updateOledSaveMode)
+        updateOledSaveMode()
+    }
+
+    const fileInput = overlay.querySelector('#oled-modal-file')
+    const chosenEl = overlay.querySelector('#oled-upload-chosen')
+
+    if (!hasPrefilled && fileInput) {
+        overlay.querySelector('.btn-choose-bin')?.addEventListener('click', () => fileInput.click())
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files?.[0]
+            if (!file) return
+            const r = new FileReader()
+            r.onload = () => {
+                chosenBytes = new Uint8Array(r.result)
+                const p = parseOledBin(chosenBytes)
+                chosenEl.textContent = p ? `${file.name} (${p.width}×${p.height})` : file.name
+                chosenEl.style.display = 'block'
+            }
+            r.readAsArrayBuffer(file)
+        })
+    }
+
+    if (!hasPrefilled && overlay.querySelector('.btn-use-current-bin')) {
+        overlay.querySelector('.btn-use-current-bin').addEventListener('click', () => {
+            const viewer = oledBinViewers.get(editorFn)
+            if (viewer) {
+                chosenBytes = viewer.getBytes()
+                const p = parseOledBin(chosenBytes)
+                chosenEl.textContent = p ? `Current tab (${p.width}×${p.height})` : 'Current tab'
+                chosenEl.style.display = 'block'
+            }
+        })
+    }
+
+    overlay.querySelector('.btn-cancel').onclick = closeScriptModal
+    overlay.querySelector('.btn-upload-oled').onclick = async () => {
+        const name = overlay.querySelector('#oled-modal-name').value.trim() || 'Untitled'
+        const authorName = overlay.querySelector('#oled-modal-author').value.trim()
+        if (!authorName) { toastr.warning('Your name is required'); return }
+        const saveAsNew = overwrite && overlay.querySelector('input[value="new"]')?.checked
+        if (overwrite && !saveAsNew) {
+            if (name.toLowerCase() === 'delete') {
+                try {
+                    await putJSON(`${SCRIPT_REGISTRY_API_BASE}/images/${overwrite.id}`, { name: 'delete', authorName })
+                    toastr.success('Image removed from registry')
+                    if (editorFn && registryEditForBin.has(editorFn)) registryEditForBin.delete(editorFn)
+                    refreshBrowseOledImagesIfOpen()
+                    closeScriptModal()
+                } catch (e) {
+                    if (e.message && (e.message.includes('not found') || e.message.includes('404'))) {
+                        if (editorFn) registryEditForBin.delete(editorFn)
+                        updateRegistryUploadRow()
+                        toastr.info('Image was already removed or not found.')
+                    } else {
+                        toastr.error(e.message || 'Delete failed')
+                    }
+                }
+                return
+            }
+            let bytes = chosenBytes
+            if (!hasPrefilled && !bytes && editorFn && oledBinViewers.get(editorFn)) {
+                bytes = oledBinViewers.get(editorFn).getBytes()
+            }
+            if (!bytes || bytes.length === 0) {
+                toastr.warning('No image data')
+                return
+            }
+            const base64 = btoa(String.fromCharCode.apply(null, bytes))
+            try {
+                await putJSON(`${SCRIPT_REGISTRY_API_BASE}/images/${overwrite.id}`, { name, authorName, description: overwrite.description || '', content: base64 })
+                toastr.success('Image updated')
+                if (editorFn && registryEditForBin.has(editorFn)) {
+                    registryEditForBin.set(editorFn, { ...overwrite, name, authorName })
+                }
+                refreshBrowseOledImagesIfOpen()
+                closeScriptModal()
+            } catch (e) {
+                if (e.message && (e.message.includes('not found') || e.message.includes('404'))) {
+                    if (editorFn) registryEditForBin.delete(editorFn)
+                    updateRegistryUploadRow()
+                    toastr.warning('Image not found in registry (it may have been deleted). Upload again to save as a new image.')
+                } else {
+                    toastr.error(e.message || 'Update failed')
+                }
+            }
+            return
+        }
+        let bytes = chosenBytes
+        if (!hasPrefilled && !bytes && editorFn && oledBinViewers.get(editorFn)) {
+            bytes = oledBinViewers.get(editorFn).getBytes()
+        }
+        if (!hasPrefilled && !bytes) {
+            toastr.warning('Choose a .bin file or use current .bin tab')
+            return
+        }
+        if (!bytes || bytes.length === 0) {
+            toastr.warning('No image data')
+            return
+        }
+        const base64 = btoa(String.fromCharCode.apply(null, bytes))
+        try {
+            await postJSON(`${SCRIPT_REGISTRY_API_BASE}/images`, { name, authorName, description: '', content: base64 })
+            toastr.success('OLED image uploaded')
+            refreshBrowseOledImagesIfOpen()
+            closeScriptModal()
         } catch (e) {
             toastr.error(e.message || 'Upload failed')
         }
@@ -1049,7 +1324,8 @@ async function showScriptEditModal(id) {
                 <button type="button" class="btn-cancel">Cancel</button>
                 <button type="button" class="primary btn-save">Save</button>
             </div>`
-        overlay.querySelector('#script-modal-content').value = data.content ?? ''
+        const useEditorContent = editor && editorFn && editorFn.endsWith('.py') && registryScriptIdForFn.get(editorFn) === id
+        overlay.querySelector('#script-modal-content').value = useEditorContent ? editor.state.doc.toString() : (data.content ?? '')
         overlay.querySelector('.btn-cancel').onclick = closeScriptModal
         overlay.querySelector('.btn-save').onclick = async () => {
             const name = overlay.querySelector('#script-modal-name').value.trim() || data.name
@@ -1059,9 +1335,9 @@ async function showScriptEditModal(id) {
             if (!authorName) { toastr.warning('Your name is required'); return }
             try {
                 await putJSON(`${SCRIPT_REGISTRY_API_BASE}/scripts/${id}`, { name, authorName, description, content })
-                toastr.success('Script updated')
+                toastr.success(name.trim().toLowerCase() === 'delete' ? 'Script deleted' : 'Script updated')
                 closeScriptModal()
-                loadScriptIndex()
+                await loadScriptIndex()
             } catch (e) {
                 toastr.error(e.message || 'Update failed')
             }
@@ -1611,6 +1887,13 @@ function switchOledBinToHexView(fn) {
             onImportPng: () => importPngToOledBitmap()
         }
         if (port) bitmapOptions.onPushFramebuffer = (fb) => sendOledFramebufferToDevice(fb)
+        if (SCRIPT_REGISTRY_API_BASE) {
+            const overwrite = registryEditForBin.get(f)
+            bitmapOptions.onUploadToRegistry = () => {
+                const v = oledBinViewers.get(f)
+                if (v) showOledImageUploadModal(v.getBytes(), f.split('/').pop().replace(/\.bin$/, '') || 'bitmap', overwrite)
+            }
+        }
         const newViewer = oledBinViewer(b, f.split('/').pop(), ed, bitmapOptions)
         oledBinViewers.set(f, newViewer)
         newViewer.setOnDirtyCallback(() => {
@@ -2109,13 +2392,18 @@ Connect your Jumperless board and start coding!
         fileTreeSelect(event.detail.fn)
         editor = getEditorFromElement(event.detail.editorElement)
         editorFn = event.detail.fn
+        updateRegistryUploadRow()
         const fileElement = QS(`#menu-file-tree [data-fn="${event.detail.fn}"]`)
         if (fileElement) {
             fileElement.classList.add("open")
         }
     })
     document.addEventListener("tabClosed", (event) => {
-        if (event.detail.fn !== IMAGE2OLED_TAB_FN) oledBinViewers.delete(event.detail.fn)
+        if (event.detail.fn !== IMAGE2OLED_TAB_FN) {
+            oledBinViewers.delete(event.detail.fn)
+            registryEditForBin.delete(event.detail.fn)
+            registryScriptIdForFn.delete(event.detail.fn)
+        }
         const fileElement = QS(`#menu-file-tree [data-fn="${event.detail.fn}"]`)
         if (fileElement) {
             fileElement.classList.remove("open")
@@ -2127,8 +2415,9 @@ Connect your Jumperless board and start coding!
         document.body.classList.add('loaded')
     }, 100)
 
-    function openBinFromImage2Oled(b64, path) {
+    function openBinFromImage2Oled(b64, path, registryEdit = null) {
         const fn = path || 'images/Untitled.bin'
+        if (registryEdit) registryEditForBin.set(fn, registryEdit)
         const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
         const editorElement = createTab(fn)
         _loadContent(fn, bytes, editorElement)
@@ -2142,7 +2431,15 @@ Connect your Jumperless board and start coding!
             localStorage.removeItem('jumperide_open_bin')
             const fn = localStorage.getItem('jumperide_open_bin_fn') || 'images/Untitled.bin'
             localStorage.removeItem('jumperide_open_bin_fn')
-            openBinFromImage2Oled(pendingBin, fn)
+            let registryEdit = null
+            try {
+                const stored = localStorage.getItem('jumperide_open_bin_registry_edit')
+                if (stored) {
+                    registryEdit = JSON.parse(stored)
+                    localStorage.removeItem('jumperide_open_bin_registry_edit')
+                }
+            } catch (_) {}
+            openBinFromImage2Oled(pendingBin, fn, registryEdit)
         } catch (e) {
             console.error('Failed to open bin from Image to OLED', e)
         }
@@ -2150,7 +2447,7 @@ Connect your Jumperless board and start coding!
 
     window.addEventListener('message', (e) => {
         if (e.data?.type === 'jumperide-open-bin' && e.data?.bin) {
-            openBinFromImage2Oled(e.data.bin, e.data.path)
+            openBinFromImage2Oled(e.data.bin, e.data.path, e.data.registryEdit || null)
         }
     })
 

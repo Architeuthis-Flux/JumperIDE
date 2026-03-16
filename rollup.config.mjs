@@ -48,6 +48,8 @@ fs.copyFileSync('src/bridge.html',    'build/bridge.html')
 fs.copyFileSync('src/image2oled.html', 'build/image2oled.html')
 fs.copyFileSync('src/image2oled.js',   'build/image2oled.js')
 fs.copyFileSync('src/image2oled.css',  'build/image2oled.css')
+fs.copyFileSync('src/oled_images_browse.html', 'build/oled_images_browse.html')
+fs.copyFileSync('src/oled_images_browse.js',   'build/oled_images_browse.js')
 fs.copyFileSync('src/app_common.css',  'build/app_common.css')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')

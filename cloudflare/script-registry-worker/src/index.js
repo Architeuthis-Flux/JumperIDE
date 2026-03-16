@@ -4,10 +4,12 @@
  */
 
 const INDEX_KEY = 'scripts:index'
+const IMAGES_INDEX_KEY = 'images:index'
 const MAX_NAME_LEN = 120
 const MAX_DESC_LEN = 500
 const MAX_AUTHOR_LEN = 80
 const MAX_CONTENT_BYTES = 100 * 1024 // 100 KiB
+const MAX_IMAGE_CONTENT_BYTES = 8 * 1024 // 8 KiB decoded for OLED .bin
 
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -78,7 +80,32 @@ export default {
 
             const url = new URL(request.url)
             const path = url.pathname.replace(/\/$/, '') || '/'
-            const segments = path.split('/').filter(Boolean) // ['scripts', ...] or []
+            const segments = path.split('/').filter(Boolean) // ['scripts'|'images', ...]
+
+            if (segments[0] === 'images') {
+                const imageId = segments[1]
+                const sub = segments[2]           // 'history' or 'revisions'
+                const revId = segments[3]
+                if (request.method === 'GET' && !imageId) {
+                    return await handleListImages(env)
+                }
+                if (request.method === 'GET' && imageId && !sub) {
+                    return await handleGetImage(imageId, env)
+                }
+                if (request.method === 'GET' && imageId && sub === 'history') {
+                    return await handleImageHistory(imageId, env)
+                }
+                if (request.method === 'GET' && imageId && sub === 'revisions' && revId) {
+                    return await handleGetImageRevision(imageId, revId, env)
+                }
+                if (request.method === 'POST' && !imageId) {
+                    return await handleCreateImage(request, env)
+                }
+                if (request.method === 'PUT' && imageId && !sub) {
+                    return await handleUpdateImage(imageId, request, env)
+                }
+                return err('Not found', 404)
+            }
 
             if (segments[0] !== 'scripts') {
                 return err('Not found', 404)
@@ -156,6 +183,177 @@ async function handleGetRevision(id, revId, env) {
     return json(JSON.parse(raw))
 }
 
+// ─── OLED images registry ───────────────────────────────────────────────────
+
+async function handleListImages(env) {
+    const raw = await env.SCRIPTS.get(IMAGES_INDEX_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    return json({ images: list })
+}
+
+async function handleGetImage(imageId, env) {
+    const raw = await env.SCRIPTS.get(`image:${imageId}:current`)
+    if (!raw) return err('Image not found', 404)
+    return json(JSON.parse(raw))
+}
+
+async function handleCreateImage(request, env) {
+    let body
+    try {
+        body = await request.json()
+    } catch {
+        return err('Invalid JSON body')
+    }
+
+    const name = sanitize(body.name || '', MAX_NAME_LEN) || 'Untitled'
+    const description = sanitize(body.description || '', MAX_DESC_LEN)
+    const authorName = sanitize(body.authorName || '', MAX_AUTHOR_LEN)
+    const contentB64 = typeof body.content === 'string' ? body.content.trim() : ''
+
+    if (!authorName) return err('authorName is required')
+    if (!contentB64) return err('content is required')
+
+    let decoded
+    try {
+        decoded = Uint8Array.from(atob(contentB64), (c) => c.charCodeAt(0))
+    } catch {
+        return err('content must be valid base64')
+    }
+    if (decoded.length > MAX_IMAGE_CONTENT_BYTES) {
+        return err(`Image too large (max ${MAX_IMAGE_CONTENT_BYTES / 1024} KiB)`)
+    }
+
+    const id = nanoid()
+    const updatedAt = new Date().toISOString()
+
+    const image = {
+        id,
+        name,
+        description,
+        authorName,
+        content: contentB64,
+        updatedAt,
+        revisionIds: [],
+    }
+
+    const indexEntry = { id, name, description, authorName, updatedAt }
+
+    await env.SCRIPTS.put(`image:${id}:current`, JSON.stringify(image))
+
+    const listRaw = await env.SCRIPTS.get(IMAGES_INDEX_KEY)
+    const list = listRaw ? JSON.parse(listRaw) : []
+    list.unshift(indexEntry)
+    list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    await env.SCRIPTS.put(IMAGES_INDEX_KEY, JSON.stringify(list))
+
+    return json({ id, ...indexEntry, content: image.content }, 201)
+}
+
+async function handleUpdateImage(imageId, request, env) {
+    const raw = await env.SCRIPTS.get(`image:${imageId}:current`)
+    if (!raw) return err('Image not found', 404)
+
+    let body
+    try {
+        body = await request.json()
+    } catch {
+        return err('Invalid JSON body')
+    }
+
+    const current = JSON.parse(raw)
+    const nameTrim = sanitize(body.name || '', MAX_NAME_LEN).trim().toLowerCase()
+    if (nameTrim === 'delete') {
+        await env.SCRIPTS.delete(`image:${imageId}:current`)
+        const listRaw = await env.SCRIPTS.get(IMAGES_INDEX_KEY)
+        let list = listRaw ? JSON.parse(listRaw) : []
+        list = list.filter((e) => e.id !== imageId)
+        await env.SCRIPTS.put(IMAGES_INDEX_KEY, JSON.stringify(list))
+        return json({ deleted: true })
+    }
+
+    const authorName = sanitize(body.authorName || '', MAX_AUTHOR_LEN)
+    if (!authorName) return err('authorName is required')
+    if (authorName !== (current.authorName || '')) {
+        return err('Only the author can edit this image', 403)
+    }
+
+    const name = sanitize(body.name !== undefined ? body.name : current.name, MAX_NAME_LEN) || current.name
+    const description = sanitize(body.description !== undefined ? body.description : current.description, MAX_DESC_LEN)
+    let content = typeof body.content === 'string' ? body.content : current.content
+    if (content) {
+        let decoded
+        try {
+            decoded = Uint8Array.from(atob(content), (c) => c.charCodeAt(0))
+        } catch {
+            return err('content must be valid base64')
+        }
+        if (decoded.length > MAX_IMAGE_CONTENT_BYTES) {
+            return err(`Image too large (max ${MAX_IMAGE_CONTENT_BYTES / 1024} KiB)`)
+        }
+    }
+
+    const updatedAt = new Date().toISOString()
+    const revId = `${imageId}-${Date.now()}`
+    const revisionIds = [...(current.revisionIds || [])]
+    revisionIds.push(revId)
+    const MAX_REVISIONS = 50
+    while (revisionIds.length > MAX_REVISIONS) {
+        const old = revisionIds.shift()
+        await env.SCRIPTS.delete(`image:${imageId}:rev:${old}`)
+    }
+    const revisionSnapshot = { ...current, id: imageId }
+    delete revisionSnapshot.revisionIds
+    await env.SCRIPTS.put(`image:${imageId}:rev:${revId}`, JSON.stringify(revisionSnapshot))
+
+    const image = {
+        ...current,
+        id: imageId,
+        name,
+        description,
+        authorName,
+        content,
+        updatedAt,
+        revisionIds,
+    }
+
+    await env.SCRIPTS.put(`image:${imageId}:current`, JSON.stringify(image))
+
+    const listRaw = await env.SCRIPTS.get(IMAGES_INDEX_KEY)
+    let list = listRaw ? JSON.parse(listRaw) : []
+    list = list.map((e) => (e.id === imageId ? { id: imageId, name, description, authorName, updatedAt } : e))
+    list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    await env.SCRIPTS.put(IMAGES_INDEX_KEY, JSON.stringify(list))
+
+    return json(image)
+}
+
+async function handleImageHistory(imageId, env) {
+    const raw = await env.SCRIPTS.get(`image:${imageId}:current`)
+    if (!raw) return err('Image not found', 404)
+    const current = JSON.parse(raw)
+    const revisionIds = current.revisionIds || []
+    const revisions = []
+    for (const rid of revisionIds.slice().reverse()) {
+        const rraw = await env.SCRIPTS.get(`image:${imageId}:rev:${rid}`)
+        if (!rraw) continue
+        const rev = JSON.parse(rraw)
+        revisions.push({
+            revId: rid,
+            name: rev.name,
+            authorName: rev.authorName,
+            description: rev.description,
+            updatedAt: rev.updatedAt,
+        })
+    }
+    return json({ revisions })
+}
+
+async function handleGetImageRevision(imageId, revId, env) {
+    const raw = await env.SCRIPTS.get(`image:${imageId}:rev:${revId}`)
+    if (!raw) return err('Revision not found', 404)
+    return json(JSON.parse(raw))
+}
+
 async function handleCreate(request, env) {
     let body
     try {
@@ -219,10 +417,22 @@ async function handleUpdate(id, request, env) {
         return err('Invalid JSON body')
     }
 
+    const current = JSON.parse(raw)
+    const nameTrim = sanitize(body.name || '', MAX_NAME_LEN).trim().toLowerCase()
+    if (nameTrim === 'delete') {
+        for (const revId of current.revisionIds || []) {
+            await env.SCRIPTS.delete(`script:${id}:rev:${revId}`)
+        }
+        await env.SCRIPTS.delete(`script:${id}:current`)
+        const listRaw = await env.SCRIPTS.get(INDEX_KEY)
+        let list = listRaw ? JSON.parse(listRaw) : []
+        list = list.filter((e) => e.id !== id)
+        await env.SCRIPTS.put(INDEX_KEY, JSON.stringify(list))
+        return json({ deleted: true })
+    }
+
     const authorName = sanitize(body.authorName || '', MAX_AUTHOR_LEN)
     if (!authorName) return err('authorName is required')
-
-    const current = JSON.parse(raw)
     const name = sanitize(body.name !== undefined ? body.name : current.name, MAX_NAME_LEN) || current.name
     const description = sanitize(body.description !== undefined ? body.description : current.description, MAX_DESC_LEN)
     let content = typeof body.content === 'string' ? body.content : current.content

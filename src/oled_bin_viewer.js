@@ -200,7 +200,7 @@ const _PAD = 16
  * @param {Uint8Array} bytes - full file (with or without header)
  * @param {string} fn - filename
  * @param {HTMLElement} targetElement
- * @param {{ onViewAsHex?: () => void, onImportPng?: () => void, onPushFramebuffer?: (fb: Uint8Array) => void | Promise<void> }} [options] - optional toolbar actions; onPushFramebuffer called with SSD1306 fb when bitmap changes (128×32 or 128×64 only), debounced
+ * @param {{ onViewAsHex?: () => void, onImportPng?: () => void, onPushFramebuffer?: (fb: Uint8Array) => void | Promise<void>, onUploadToRegistry?: () => void }} [options] - optional toolbar actions; onPushFramebuffer called with SSD1306 fb when bitmap changes (128×32 or 128×64 only), debounced
  * @returns {{ getBytes: () => Uint8Array, setDirty: (boolean) => void, isDirty: () => boolean }}
  */
 export function oledBinViewer(bytes, fn, targetElement, options = {}) {
@@ -302,6 +302,15 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         viewAsHexBtn.classList.add('oled-bin-view-as-hex')
         viewAsHexBtn.addEventListener('click', options.onViewAsHex)
         toolbar.appendChild(viewAsHexBtn)
+    }
+    if (options.onUploadToRegistry) {
+        const uploadRegBtn = document.createElement('button')
+        uploadRegBtn.type = 'button'
+        uploadRegBtn.textContent = 'Upload to registry'
+        uploadRegBtn.title = 'Upload this OLED image to the shared registry'
+        uploadRegBtn.classList.add('oled-bin-upload-registry')
+        uploadRegBtn.addEventListener('click', options.onUploadToRegistry)
+        toolbar.appendChild(uploadRegBtn)
     }
     if (options.onPushFramebuffer) {
         const liveLabel = document.createElement('label')

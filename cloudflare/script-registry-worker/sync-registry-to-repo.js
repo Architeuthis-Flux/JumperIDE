@@ -33,11 +33,17 @@ async function main() {
     }
 
     console.log('Fetching script list from', REGISTRY_URL + '/scripts')
-    const { scripts: list } = await fetchJSON(REGISTRY_URL + '/scripts')
-    if (!Array.isArray(list) || list.length === 0) {
-        console.log('No scripts in registry.')
+    const data = await fetchJSON(REGISTRY_URL + '/scripts')
+    const list = data && data.scripts
+    if (!Array.isArray(list)) {
+        console.log('Registry returned unexpected shape (missing scripts array). Keys:', data ? Object.keys(data) : 'null')
         return
     }
+    if (list.length === 0) {
+        console.log('No scripts in registry (list is empty).')
+        return
+    }
+    console.log('Found', list.length, 'script(s) in registry')
 
     let idToFile = {}
     let fileMeta = {}
