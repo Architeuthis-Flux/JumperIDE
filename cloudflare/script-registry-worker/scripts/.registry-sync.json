@@ -3,7 +3,8 @@
     "azd2il1upk6x": "interaction.py",
     "64ft11homc5u": "print.py",
     "9gdsv7oap3p6": "sevenseg.py",
-    "tjzql8fgndm2": "lightbar.py"
+    "tjzql8fgndm2": "lightbar.py",
+    "6xxsilj6m2xq": "555_guided.py"
   },
   "fileMeta": {
     "interaction.py": {
@@ -21,6 +22,10 @@
     "lightbar.py": {
       "description": "object for handling hlmp lightbars",
       "authorName": "Boatplugs"
+    },
+    "555_guided.py": {
+      "description": "Place a 555, 2 resistors, a cap, and an LED and this will automatically wire it up. (Testing Agent Skills)",
+      "authorName": "Kevin"
     }
   }
 }
