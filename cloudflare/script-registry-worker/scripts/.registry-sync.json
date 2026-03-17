@@ -2,7 +2,8 @@
   "idToFile": {
     "azd2il1upk6x": "interaction.py",
     "64ft11homc5u": "print.py",
-    "9gdsv7oap3p6": "sevenseg.py"
+    "9gdsv7oap3p6": "sevenseg.py",
+    "tjzql8fgndm2": "lightbar.py"
   },
   "fileMeta": {
     "interaction.py": {
@@ -15,6 +16,10 @@
     },
     "sevenseg.py": {
       "description": "object for handling a single digit seven segment display",
+      "authorName": "Boatplugs"
+    },
+    "lightbar.py": {
+      "description": "object for handling hlmp lightbars",
       "authorName": "Boatplugs"
     }
   }
