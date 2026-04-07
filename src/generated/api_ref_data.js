@@ -60,6 +60,7 @@ export const API_REF_HEADINGS = [
   "get_switch_position()",
   "set_switch_position(position)",
   "check_switch_position()",
+  "probe_autoconnect([enable])",
   "clickwheel_get_position()",
   "clickwheel_reset_position()",
   "clickwheel_get_direction([consume=True])",
@@ -171,6 +172,7 @@ export const API_REF_DESCRIPTIONS = {
   "get_switch_position": "Gets the current probe switch position.",
   "set_switch_position": "Manually sets the probe switch position.",
   "check_switch_position": "Checks the probe switch position using current sensing and updates the internal state.",
+  "probe_autoconnect": "Gets or sets whether the probe DAC auto-connects on the routable buffer.",
   "clickwheel_get_position": "Gets the raw clickwheel position counter.",
   "clickwheel_reset_position": "Resets the clickwheel position counter to 0.",
   "clickwheel_get_direction": "Gets the current clickwheel direction event.",
@@ -398,6 +400,9 @@ export const API_REF_ARG_HELP = {
   },
   "set_switch_position": {
     "position": "`0` (SWITCH_MEASURE), `1` (SWITCH_SELECT), or `-1` (SWITCH_UNKNOWN)"
+  },
+  "probe_autoconnect": {
+    "enable": "`True` to enable auto-connect, `False` to disable. If omitted, returns the current state without changing it."
   },
   "clickwheel_get_direction": {
     "consume": "If `True` (default), clears the direction after reading (one-shot detection). If `False`, the direction persists until consumed."
@@ -707,6 +712,7 @@ export const API_REF_SYMBOLS = [
   "print_crossbars",
   "print_nets",
   "print_paths",
+  "probe_autoconnect",
   "probe_button",
   "probe_button_blocking",
   "probe_button_nonblocking",

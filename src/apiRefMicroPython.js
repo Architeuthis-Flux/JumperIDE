@@ -647,6 +647,7 @@ export const JUMPERLESS_ANCHORS = Object.freeze({
     get_button: 'probe_button', probe_button: 'probe_button', probe_button_blocking: 'probe_button', probe_button_nonblocking: 'probe_button',
     button_read: 'probe_button', read_button: 'probe_button', check_button: 'probe_button', button_check: 'probe_button',
     get_switch_position: 'get_switch_position', set_switch_position: 'set_switch_position', check_switch_position: 'check_switch_position',
+    probe_autoconnect: 'probe_autoconnect',
     overlay_set: 'overlay_set', overlay_clear: 'overlay_clear', overlay_clear_all: 'overlay_clear_all', overlay_set_pixel: 'overlay_set_pixel',
     overlay_count: 'overlay_count', overlay_shift: 'overlay_shift', overlay_place: 'overlay_place', overlay_serialize: 'overlay_serialize',
     print_bridges: 'print_bridges', print_paths: 'print_paths', print_crossbars: 'print_crossbars', print_nets: 'print_nets', print_chip_status: 'print_chip_status',
