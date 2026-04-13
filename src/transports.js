@@ -15,6 +15,7 @@ export class Transport {
         }
         this.mutex = new Mutex()
         this.inTransaction = false
+        this._disconnected = false
         this.receivedData = ''
         this.activityCallback = () => {}
         this.receiveCallback = () => {}
@@ -65,7 +66,10 @@ export class Transport {
     }
 
     onDisconnect(callback) {
-        this.disconnectCallback = callback
+        this.disconnectCallback = () => {
+            this._disconnected = true
+            callback()
+        }
     }
 
     /*
@@ -113,6 +117,9 @@ export class Transport {
         }
         let endTime = Date.now() + timeout
         while (timeout <= 0 || (Date.now() < endTime)) {
+            if (this._disconnected) {
+                throw new Error('Disconnected')
+            }
             if (this.receivedData.length >= n) {
                 const res = this.receivedData.substring(0, n)
                 this.receivedData = this.receivedData.substring(n)
@@ -138,6 +145,9 @@ export class Transport {
         }
         let endTime = Date.now() + timeout
         while (timeout <= 0 || (Date.now() < endTime)) {
+            if (this._disconnected) {
+                throw new Error('Disconnected')
+            }
             for (let ending of endings) {
                 const idx = this.receivedData.indexOf(ending) + ending.length
                 if (idx >= ending.length) {

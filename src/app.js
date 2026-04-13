@@ -242,6 +242,12 @@ export async function connectDevice(type) {
         QID(`btn-conn-${type}`).classList.remove('connected')
         toastr.warning('Device disconnected')
         port = null
+        if (isInRunMode) {
+            const btnRunIcon = QID('btn-run-icon')
+            if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
+            else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
+            isInRunMode = false
+        }
         //connectDevice(type)
     })
 
