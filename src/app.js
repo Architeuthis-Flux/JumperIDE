@@ -87,6 +87,15 @@ const registryEditForBin = new Map()
 /** When a .py tab was opened from the registry, maps fn -> script id so Edit modal can use editor content. */
 const registryScriptIdForFn = new Map()
 
+function resetRunButton() {
+    if (isInRunMode) {
+        const btnRunIcon = QID('btn-run-icon')
+        if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
+        else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
+        isInRunMode = false
+    }
+}
+
 async function disconnectDevice() {
     if (port) {
         try {
@@ -96,6 +105,8 @@ async function disconnectDevice() {
         }
         port = null
     }
+
+    resetRunButton()
 
     for (const t of ['ws', 'ble', 'usb']) {
         QID(`btn-conn-${t}`).classList.remove('connected')
@@ -231,6 +242,7 @@ export async function connectDevice(type) {
     }
 
     port = new_port
+    resetRunButton()
 
     port.onActivity(indicateActivity)
 
@@ -242,13 +254,7 @@ export async function connectDevice(type) {
         QID(`btn-conn-${type}`).classList.remove('connected')
         toastr.warning('Device disconnected')
         port = null
-        if (isInRunMode) {
-            const btnRunIcon = QID('btn-run-icon')
-            if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
-            else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
-            isInRunMode = false
-        }
-        //connectDevice(type)
+        resetRunButton()
     })
 
     QID(`btn-conn-${type}`).classList.add('connected')
@@ -880,11 +886,9 @@ export async function runCurrentFile() {
             return
         }
     } finally {
-        port.emit = false
+        if (port) port.emit = false
         await raw.end()
-        if (btnRunIcon.src) btnRunIcon.src = 'assets/iconPlay1024.png'
-        else btnRunIcon.classList.replace('fa-circle-stop', 'fa-circle-play')
-        isInRunMode = false
+        resetRunButton()
         term.write('\r\n>>> ')
     }
     // Success
