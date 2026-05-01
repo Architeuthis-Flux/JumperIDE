@@ -61,25 +61,40 @@ self.addEventListener('fetch', event => {
   event.respondWith((async () => {
     const cache = await caches.open(cacheName);
     const url = normalizeUrl(event.request.url);
+
+    // Network-first for HTML pages — always get the latest deploy,
+    // fall back to cache only when offline.
+    if (url.pathname.endsWith('.html') || url.pathname === '/') {
+      try {
+        const rsp = await fetch(event.request, { cache: 'no-store' });
+        if (rsp.ok && contentToCache.has(url.pathname)) {
+          cache.put(url, rsp.clone());
+        }
+        return rsp;
+      } catch (_) {
+        const cached = await cache.match(url);
+        if (cached) {
+          log(`Offline, using cached: ${url}`);
+          return cached;
+        }
+        throw _;
+      }
+    }
+
+    // Cache-first for static assets (icons, images)
     const r = await cache.match(url);
     if (r) {
-      log(`Using cached: ${url}`);
       return r;
-    } else {
-      //log(`Loading: ${url}`);
-      try {
-        const rsp = await fetch(event.request);
-
-        if (contentToCache.has(url.pathname)) {
-          log(`Caching: ${url}`);
-          cache.put(event.request, rsp.clone());
-        }
-
-        return rsp;
-      } catch (err) {
-        log(err.message);
-        throw err;
+    }
+    try {
+      const rsp = await fetch(event.request);
+      if (contentToCache.has(url.pathname)) {
+        cache.put(url, rsp.clone());
       }
+      return rsp;
+    } catch (err) {
+      log(err.message);
+      throw err;
     }
   })());
 });
