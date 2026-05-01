@@ -4,6 +4,10 @@
  * - Format 1: 4-byte header (width, height as 16-bit LE) + bitmap data
  * - Format 2: Raw bitmap by size (512→128x32, 1024→128x64, 256→64x32, 496→128x31)
  * Bitmap: 1 bit per pixel, MSB first per byte, row-major.
+ *
+ * Also supports SSD1306 page-major framebuffer format (.fb files):
+ * - 1024 bytes = 128×64, 512 bytes = 128×32
+ * - byte at [x + (y/8)*width], bit (y&7), LSB = top of 8-pixel column
  */
 
 /**
@@ -33,6 +37,56 @@ export function parseOledBin(bytes) {
     if (fileSize === 256) return { width: 64, height: 32, dataOffset: 0, hasHeader: false }
     if (fileSize === 496) return { width: 128, height: 31, dataOffset: 0, hasHeader: false }
     return null
+}
+
+/**
+ * Convert SSD1306 page-major framebuffer to row-major MSB-first bitmap.
+ * SSD1306: byte at [x + page*width], page = y/8, bit (y&7), LSB = top.
+ * Row-major: byte at [y * bytesPerRow + x/8], bit 7-(x&7).
+ * @param {Uint8Array} fb - SSD1306 framebuffer (512 or 1024 bytes)
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array} row-major bitmap
+ */
+export function ssd1306ToRowMajor(fb, width, height) {
+    const bytesPerRow = Math.ceil(width / 8)
+    const out = new Uint8Array(bytesPerRow * height)
+    for (let y = 0; y < height; y++) {
+        const page = y >> 3
+        const pageBit = y & 7
+        for (let x = 0; x < width; x++) {
+            const fbByte = fb[page * width + x]
+            if ((fbByte >> pageBit) & 1) {
+                out[y * bytesPerRow + (x >> 3)] |= 1 << (7 - (x & 7))
+            }
+        }
+    }
+    return out
+}
+
+/**
+ * Convert row-major MSB-first bitmap back to SSD1306 page-major framebuffer.
+ * @param {Uint8Array} bitmap - row-major bitmap
+ * @param {number} width
+ * @param {number} height
+ * @returns {Uint8Array} SSD1306 framebuffer
+ */
+export function rowMajorToSsd1306(bitmap, width, height) {
+    const pages = Math.ceil(height / 8)
+    const fb = new Uint8Array(pages * width)
+    const bytesPerRow = Math.ceil(width / 8)
+    for (let y = 0; y < height; y++) {
+        const page = y >> 3
+        const pageBit = y & 7
+        for (let x = 0; x < width; x++) {
+            const byteIdx = y * bytesPerRow + (x >> 3)
+            const bit = 7 - (x & 7)
+            if ((bitmap[byteIdx] >> bit) & 1) {
+                fb[page * width + x] |= 1 << pageBit
+            }
+        }
+    }
+    return fb
 }
 
 /**
@@ -195,25 +249,52 @@ const SCALE = 4
 const _PAD = 16
 
 /**
+ * Parse a .fb (SSD1306 page-major framebuffer) file. Returns parsed info or null.
+ * @param {Uint8Array} bytes
+ * @returns {{ width: number, height: number } | null}
+ */
+export function parseFbFile(bytes) {
+    if (bytes.length === 1024) return { width: 128, height: 64 }
+    if (bytes.length === 512) return { width: 128, height: 32 }
+    return null
+}
+
+/**
  * Create OLED BIN viewer/editor in targetElement.
  * Returns an object { getBytes(), setDirty(), isDirty } for save integration.
  * @param {Uint8Array} bytes - full file (with or without header)
  * @param {string} fn - filename
  * @param {HTMLElement} targetElement
- * @param {{ onViewAsHex?: () => void, onImportPng?: () => void, onPushFramebuffer?: (fb: Uint8Array) => void | Promise<void>, onUploadToRegistry?: () => void }} [options] - optional toolbar actions; onPushFramebuffer called with SSD1306 fb when bitmap changes (128×32 or 128×64 only), debounced
+ * @param {{ onViewAsHex?: () => void, onImportPng?: () => void, onPushFramebuffer?: (fb: Uint8Array) => void | Promise<void>, onUploadToRegistry?: () => void, isFbFormat?: boolean }} [options] - optional toolbar actions; isFbFormat: true for SSD1306 page-major .fb files
  * @returns {{ getBytes: () => Uint8Array, setDirty: (boolean) => void, isDirty: () => boolean }}
  */
 export function oledBinViewer(bytes, fn, targetElement, options = {}) {
-    const parsed = parseOledBin(bytes)
-    if (!parsed) return null
+    const isFb = !!options.isFbFormat
+    let parsed
+    if (isFb) {
+        parsed = parseFbFile(bytes)
+        if (!parsed) return null
+    } else {
+        parsed = parseOledBin(bytes)
+        if (!parsed) return null
+    }
 
-    const { dataOffset, hasHeader: initialHasHeader } = parsed
-    let width = parsed.width
-    let height = parsed.height
-    let hasHeader = initialHasHeader
-    const bitmapLen = Math.floor((width * height + 7) / 8)
-    const bitmap = new Uint8Array(bytes.buffer, bytes.byteOffset + dataOffset, bitmapLen)
-    let bitmapCopy = new Uint8Array(bitmap)
+    let width, height, hasHeader
+    let bitmapCopy
+    if (isFb) {
+        width = parsed.width
+        height = parsed.height
+        hasHeader = false
+        bitmapCopy = ssd1306ToRowMajor(bytes, width, height)
+    } else {
+        const { dataOffset, hasHeader: initialHasHeader } = parsed
+        width = parsed.width
+        height = parsed.height
+        hasHeader = initialHasHeader
+        const bitmapLen = Math.floor((width * height + 7) / 8)
+        const bitmap = new Uint8Array(bytes.buffer, bytes.byteOffset + dataOffset, bitmapLen)
+        bitmapCopy = new Uint8Array(bitmap)
+    }
 
     let dirty = false
     let inverted = false
@@ -311,6 +392,15 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         uploadRegBtn.classList.add('oled-bin-upload-registry')
         uploadRegBtn.addEventListener('click', options.onUploadToRegistry)
         toolbar.appendChild(uploadRegBtn)
+    }
+    if (options.onAnimate) {
+        const animBtn = document.createElement('button')
+        animBtn.type = 'button'
+        animBtn.textContent = 'Animate'
+        animBtn.title = 'View this frame sequence as animation'
+        animBtn.classList.add('oled-bin-animate')
+        animBtn.addEventListener('click', options.onAnimate)
+        toolbar.appendChild(animBtn)
     }
     if (options.onPushFramebuffer) {
         const liveLabel = document.createElement('label')
@@ -549,6 +639,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
 
     return {
         getBytes() {
+            if (isFb) return rowMajorToSsd1306(bitmapCopy, width, height)
             return buildOledBin(width, height, bitmapCopy, hasHeader)
         },
         setDirty(value) {
@@ -561,6 +652,202 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
             const id = 'oledBinOnDirty_' + Math.random().toString(36).slice(2)
             window[id] = () => cb()
             container.dataset.onDirty = id
+        }
+    }
+}
+
+/**
+ * Detect animation frame sequence from a filename + sibling list.
+ * e.g. "fly_02.fb" with siblings ["fly_01.fb","fly_02.fb",...,"fly_06.fb"]
+ * Returns { prefix, frames: [sorted filenames] } or null.
+ */
+export function detectFrameSequence(fn, siblings) {
+    const m = fn.match(/^(.+?)_(\d+)(\.\w+)$/)
+    if (!m) return null
+    const [, prefix, , ext] = m
+    const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)${ext.replace(/\./g, '\\.')}$`)
+    const frames = siblings.filter(s => re.test(s)).sort((a, b) => {
+        const na = parseInt(a.match(re)[1], 10)
+        const nb = parseInt(b.match(re)[1], 10)
+        return na - nb
+    })
+    return frames.length > 1 ? { prefix, ext, frames } : null
+}
+
+/**
+ * Render SSD1306 framebuffer bytes to a canvas element (for thumbnails/animation).
+ * @param {Uint8Array} fbBytes - SSD1306 page-major framebuffer
+ * @param {number} width
+ * @param {number} height
+ * @param {HTMLCanvasElement} canvas
+ */
+function renderFbToCanvas(fbBytes, width, height, canvas) {
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    const imgData = ctx.createImageData(width, height)
+    for (let y = 0; y < height; y++) {
+        const page = y >> 3
+        const pageBit = y & 7
+        for (let x = 0; x < width; x++) {
+            const on = (fbBytes[page * width + x] >> pageBit) & 1
+            const c = on ? 255 : 0
+            const i = (y * width + x) * 4
+            imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = c
+            imgData.data[i + 3] = 255
+        }
+    }
+    ctx.putImageData(imgData, 0, 0)
+}
+
+/**
+ * Animation timeline viewer for .fb frame sequences.
+ * @param {Array<{ name: string, bytes: Uint8Array }>} frames - ordered frames with SSD1306 data
+ * @param {string} prefix - sequence name (e.g. "fly")
+ * @param {HTMLElement} targetElement
+ * @param {{ onOpenFrame?: (name: string) => void }} [options]
+ * @returns {{ destroy: () => void }}
+ */
+export function fbAnimationViewer(frames, prefix, targetElement, options = {}) {
+    if (!frames.length) return null
+    const first = parseFbFile(frames[0].bytes)
+    if (!first) return null
+    const { width, height } = first
+
+    let currentFrame = 0
+    let playing = false
+    let intervalId = null
+    let fps = 8
+
+    const container = document.createElement('div')
+    container.className = 'fb-anim-viewer'
+
+    const info = document.createElement('div')
+    info.className = 'fb-anim-info'
+    info.textContent = `${prefix} • ${frames.length} frames • ${width}×${height}`
+    container.appendChild(info)
+
+    const toolbar = document.createElement('div')
+    toolbar.className = 'fb-anim-toolbar'
+
+    const prevBtn = document.createElement('button')
+    prevBtn.type = 'button'
+    prevBtn.innerHTML = '<i class="fa-solid fa-backward-step"></i>'
+    prevBtn.title = 'Previous frame'
+    prevBtn.addEventListener('click', () => { stop(); setFrame(currentFrame - 1) })
+    toolbar.appendChild(prevBtn)
+
+    const playBtn = document.createElement('button')
+    playBtn.type = 'button'
+    playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'
+    playBtn.title = 'Play / Pause'
+    playBtn.addEventListener('click', () => playing ? stop() : play())
+    toolbar.appendChild(playBtn)
+
+    const nextBtn = document.createElement('button')
+    nextBtn.type = 'button'
+    nextBtn.innerHTML = '<i class="fa-solid fa-forward-step"></i>'
+    nextBtn.title = 'Next frame'
+    nextBtn.addEventListener('click', () => { stop(); setFrame(currentFrame + 1) })
+    toolbar.appendChild(nextBtn)
+
+    const fpsLabel = document.createElement('label')
+    fpsLabel.className = 'fb-anim-fps-label'
+    fpsLabel.textContent = 'FPS:'
+    const fpsInput = document.createElement('input')
+    fpsInput.type = 'number'
+    fpsInput.min = 1
+    fpsInput.max = 30
+    fpsInput.value = String(fps)
+    fpsInput.className = 'fb-anim-fps-input'
+    fpsInput.addEventListener('change', () => {
+        fps = Math.max(1, Math.min(30, parseInt(fpsInput.value, 10) || 8))
+        fpsInput.value = String(fps)
+        if (playing) { stop(); play() }
+    })
+    fpsLabel.appendChild(fpsInput)
+    toolbar.appendChild(fpsLabel)
+
+    const frameCounter = document.createElement('span')
+    frameCounter.className = 'fb-anim-frame-counter'
+    toolbar.appendChild(frameCounter)
+
+    container.appendChild(toolbar)
+
+    const canvasWrap = document.createElement('div')
+    canvasWrap.className = 'fb-anim-canvas-wrap'
+    canvasWrap.style.width = (width * SCALE) + 'px'
+    canvasWrap.style.height = (height * SCALE) + 'px'
+    const canvas = document.createElement('canvas')
+    canvas.style.width = '100%'
+    canvas.style.height = '100%'
+    canvas.style.imageRendering = 'pixelated'
+    canvasWrap.appendChild(canvas)
+    container.appendChild(canvasWrap)
+
+    const thumbStrip = document.createElement('div')
+    thumbStrip.className = 'fb-anim-thumbstrip'
+    const thumbCanvases = frames.map((f, i) => {
+        const thumbWrap = document.createElement('div')
+        thumbWrap.className = 'fb-anim-thumb'
+        thumbWrap.title = f.name
+        const thumbCanvas = document.createElement('canvas')
+        thumbCanvas.style.imageRendering = 'pixelated'
+        const p = parseFbFile(f.bytes)
+        if (p) renderFbToCanvas(f.bytes, p.width, p.height, thumbCanvas)
+        thumbCanvas.style.width = '64px'
+        thumbCanvas.style.height = '32px'
+        thumbWrap.appendChild(thumbCanvas)
+        thumbWrap.addEventListener('click', () => { stop(); setFrame(i) })
+        if (options.onOpenFrame) {
+            const editBtn = document.createElement('button')
+            editBtn.type = 'button'
+            editBtn.className = 'fb-anim-thumb-edit'
+            editBtn.textContent = 'Edit'
+            editBtn.title = `Open ${f.name} in editor`
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation()
+                options.onOpenFrame(f.name)
+            })
+            thumbWrap.appendChild(editBtn)
+        }
+        thumbStrip.appendChild(thumbWrap)
+        return thumbWrap
+    })
+    container.appendChild(thumbStrip)
+
+    function setFrame(idx) {
+        currentFrame = ((idx % frames.length) + frames.length) % frames.length
+        const f = frames[currentFrame]
+        const p = parseFbFile(f.bytes)
+        if (p) renderFbToCanvas(f.bytes, p.width, p.height, canvas)
+        frameCounter.textContent = `${currentFrame + 1} / ${frames.length}`
+        thumbCanvases.forEach((t, i) => t.classList.toggle('active', i === currentFrame))
+    }
+
+    function play() {
+        if (playing) return
+        playing = true
+        playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>'
+        intervalId = setInterval(() => setFrame(currentFrame + 1), 1000 / fps)
+    }
+
+    function stop() {
+        if (!playing) return
+        playing = false
+        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'
+        clearInterval(intervalId)
+        intervalId = null
+    }
+
+    setFrame(0)
+    targetElement.innerHTML = ''
+    targetElement.appendChild(container)
+
+    return {
+        destroy() {
+            stop()
+            targetElement.innerHTML = ''
         }
     }
 }

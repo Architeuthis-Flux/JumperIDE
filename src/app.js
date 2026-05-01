@@ -39,7 +39,7 @@ import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
-import { parseOledBin, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin } from './oled_bin_viewer.js'
+import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, fbAnimationViewer } from './oled_bin_viewer.js'
 import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
@@ -534,6 +534,12 @@ function _updateFileTree(fs_tree, fs_stats)
                     icon = '<i class="fa-solid fa-cube fa-fw"></i>'
                 } else if (['.CRT', '.PEM', '.DER', '.CER', '.PFX', '.P12'].some(x => fnuc.endsWith(x))) {
                     icon = '<i class="fa-solid fa-certificate fa-fw"></i>'
+                } else if (fnuc.endsWith('.BIN') || fnuc.endsWith('.FB')) {
+                    icon = '<i class="fa-solid fa-image fa-fw"></i>'
+                } else if (fnuc.endsWith('.WAD')) {
+                    icon = '<i class="fa-solid fa-gamepad fa-fw"></i>'
+                } else if (fnuc.endsWith('.MSGPACK')) {
+                    icon = '<i class="fa-solid fa-database fa-fw"></i>'
                 } else if (fnuc === '???') {
                     icon = '<i class="fa-solid fa-file-circle-exclamation fa-fw"></i>'
                 } else {
@@ -652,11 +658,14 @@ async function _raw_loadFile(raw, fn) {
         content = await raw.readFile(fn)
         if (fn.endsWith('.bin') && (content.length === 0 || !parseOledBin(content))) {
             content = defaultOledBinBytes(128, 32)
-        } else if (!fn.endsWith('.bin')) {
+        } else if (fn.endsWith('.fb') && !parseFbFile(content)) {
+            toastr.error(`Invalid .fb file: ${fn} (expected 512 or 1024 bytes)`)
+            return
+        } else if (!fn.endsWith('.bin') && !fn.endsWith('.fb')) {
             try {
                 content = (new TextDecoder('utf-8', { fatal: true })).decode(content)
-            } catch (err) {
-                toastr.error(`Unable to load file: ${err}`)
+            } catch (_) {
+                // Binary file — keep as Uint8Array for hex viewer
             }
         }
     }
@@ -667,13 +676,21 @@ async function _loadContent(fn, content, editorElement) {
     const willDisasm = fn.endsWith('.mpy') && QID('advanced-mode').checked
 
     if (content instanceof Uint8Array && !willDisasm) {
-        if (fn.endsWith('.bin') && parseOledBin(content)) {
+        const isFbFile = fn.endsWith('.fb')
+        const isBinFile = fn.endsWith('.bin')
+        const canViewAsBitmap = isBinFile ? !!parseOledBin(content) : isFbFile ? !!parseFbFile(content) : false
+
+        if (canViewAsBitmap) {
             const viewerOptions = {
                 onViewAsHex: () => switchOledBinToHexView(fn),
                 onImportPng: () => importPngToOledBitmap(),
-                onPushFramebuffer: (fb) => sendOledFramebufferToDevice(fb)
+                onPushFramebuffer: (fb) => sendOledFramebufferToDevice(fb),
+                isFbFormat: isFbFile
             }
-            if (SCRIPT_REGISTRY_API_BASE) {
+            if (isFbFile) {
+                viewerOptions.onAnimate = () => openFbAnimation(fn, editorElement)
+            }
+            if (SCRIPT_REGISTRY_API_BASE && isBinFile) {
                 const overwrite = registryEditForBin.get(fn)
                 viewerOptions.onUploadToRegistry = () => {
                     const v = oledBinViewers.get(fn)
@@ -1921,6 +1938,62 @@ function updateApiRefFullWidthButton(container, btn) {
     if (typeof dom !== 'undefined' && dom.watch) dom.watch()
 }
 
+/**
+ * Detect .fb frame sequence siblings from the file tree, load them from the device,
+ * and show the animation viewer in the editor pane.
+ */
+async function openFbAnimation(fn, editorElement) {
+    const baseName = fn.split('/').pop()
+    const dirPath = fn.includes('/') ? fn.slice(0, fn.lastIndexOf('/') + 1) : '/'
+    const siblings = []
+    QSA('#menu-file-tree [data-fn]').forEach(el => {
+        const sibFn = el.dataset.fn
+        if (sibFn.endsWith('.fb')) {
+            const sibDir = sibFn.includes('/') ? sibFn.slice(0, sibFn.lastIndexOf('/') + 1) : '/'
+            if (sibDir === dirPath) siblings.push(sibFn.split('/').pop())
+        }
+    })
+    const seq = detectFrameSequence(baseName, siblings)
+    if (!seq || seq.frames.length < 2) {
+        toastr.info('No animation sequence found (need multiple files like name_01.fb, name_02.fb)')
+        return
+    }
+    if (!port) {
+        toastr.warning('Connect to device to load animation frames')
+        return
+    }
+    const loading = document.createElement('div')
+    loading.className = 'fb-anim-loading'
+    loading.textContent = `Loading ${seq.frames.length} frames...`
+    editorElement.innerHTML = ''
+    editorElement.appendChild(loading)
+    try {
+        const raw = await MpRawMode.begin(port)
+        const frameData = []
+        try {
+            for (const frameName of seq.frames) {
+                const framePath = dirPath + frameName
+                const bytes = await raw.readFile(framePath)
+                frameData.push({ name: frameName, bytes })
+            }
+        } finally {
+            await raw.end()
+        }
+        const animViewer = fbAnimationViewer(frameData, seq.prefix, editorElement, {
+            onOpenFrame: (name) => {
+                const framePath = dirPath + name
+                fileClick(framePath)
+            }
+        })
+        if (!animViewer) {
+            toastr.error('Could not create animation viewer')
+        }
+    } catch (e) {
+        toastr.error(`Failed to load frames: ${e.message || e}`)
+        editorElement.innerHTML = ''
+    }
+}
+
 function switchOledBinToHexView(fn) {
     const tab = QS(`#editor-tabs [data-fn="${fn}"]`)
     if (!tab) return
@@ -1947,12 +2020,14 @@ function switchOledBinToHexView(fn) {
         if (!ed || !v) return
         const b = v.getBytes()
         ed.innerHTML = ''
+        const isFb = f.endsWith('.fb')
         const bitmapOptions = {
             onViewAsHex: () => switchOledBinToHexView(f),
-            onImportPng: () => importPngToOledBitmap()
+            onImportPng: () => importPngToOledBitmap(),
+            isFbFormat: isFb
         }
         if (port) bitmapOptions.onPushFramebuffer = (fb) => sendOledFramebufferToDevice(fb)
-        if (SCRIPT_REGISTRY_API_BASE) {
+        if (SCRIPT_REGISTRY_API_BASE && !isFb) {
             const overwrite = registryEditForBin.get(f)
             bitmapOptions.onUploadToRegistry = () => {
                 const v = oledBinViewers.get(f)
