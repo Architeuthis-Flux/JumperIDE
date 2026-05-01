@@ -39,7 +39,7 @@ import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
-import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, fbAnimationViewer } from './oled_bin_viewer.js'
+import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence } from './oled_bin_viewer.js'
 import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
@@ -52,7 +52,9 @@ import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFil
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
-         faPen, faClockRotateLeft, faUpload
+         faPen, faClockRotateLeft, faUpload,
+         faChevronRight, faChevronDown, faGamepad, faDatabase,
+         faPlay, faPause, faBackwardStep, faForwardStep
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
@@ -63,7 +65,9 @@ library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, fa
          faCube, faTools, faSliders, faCircleInfo, faStar, faExpand, faCertificate, faBook,
          faPlug, faArrowUpRightFromSquare, faTerminal, faBug, faGaugeHigh,
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
-         faPen, faClockRotateLeft, faUpload)
+         faPen, faClockRotateLeft, faUpload,
+         faChevronRight, faChevronDown, faGamepad, faDatabase,
+         faPlay, faPause, faBackwardStep, faForwardStep)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -711,9 +715,6 @@ async function _loadContent(fn, content, editorElement) {
                 onPushFramebuffer: (fb) => sendOledFramebufferToDevice(fb),
                 isFbFormat: isFbFile
             }
-            if (isFbFile) {
-                viewerOptions.onAnimate = () => openFbAnimation(fn, editorElement)
-            }
             if (SCRIPT_REGISTRY_API_BASE && isBinFile) {
                 const overwrite = registryEditForBin.get(fn)
                 viewerOptions.onUploadToRegistry = () => {
@@ -731,6 +732,7 @@ async function _loadContent(fn, content, editorElement) {
                     const tabTitle = QS(`#editor-tabs [data-fn="${fn}"] .tab-title`)
                     if (tabTitle) tabTitle.classList.add('changed')
                 })
+                if (isFbFile && port) loadFbAnimationStrip(fn, viewer)
             } else {
                 hexViewer(content.buffer, editorElement)
             }
@@ -1963,10 +1965,10 @@ function updateApiRefFullWidthButton(container, btn) {
 }
 
 /**
- * Detect .fb frame sequence siblings from the file tree, load them from the device,
- * and show the animation viewer in the editor pane.
+ * Detect .fb frame sequence siblings, load them from the device,
+ * and populate the inline animation strip in the viewer.
  */
-async function openFbAnimation(fn, editorElement) {
+async function loadFbAnimationStrip(fn, viewer) {
     const baseName = fn.split('/').pop()
     const dirPath = fn.includes('/') ? fn.slice(0, fn.lastIndexOf('/') + 1) : '/'
     const siblings = []
@@ -1978,19 +1980,8 @@ async function openFbAnimation(fn, editorElement) {
         }
     })
     const seq = detectFrameSequence(baseName, siblings)
-    if (!seq || seq.frames.length < 2) {
-        toastr.info('No animation sequence found (need multiple files like name_01.fb, name_02.fb)')
-        return
-    }
-    if (!port) {
-        toastr.warning('Connect to device to load animation frames')
-        return
-    }
-    const loading = document.createElement('div')
-    loading.className = 'fb-anim-loading'
-    loading.textContent = `Loading ${seq.frames.length} frames...`
-    editorElement.innerHTML = ''
-    editorElement.appendChild(loading)
+    if (!seq || seq.frames.length < 2) return
+    if (!port) return
     try {
         const raw = await MpRawMode.begin(port)
         const frameData = []
@@ -1998,23 +1989,18 @@ async function openFbAnimation(fn, editorElement) {
             for (const frameName of seq.frames) {
                 const framePath = dirPath + frameName
                 const bytes = await raw.readFile(framePath)
-                frameData.push({ name: frameName, bytes })
+                frameData.push({
+                    name: frameName,
+                    bytes,
+                    onOpen: () => fileClick(dirPath + frameName)
+                })
             }
         } finally {
             await raw.end()
         }
-        const animViewer = fbAnimationViewer(frameData, seq.prefix, editorElement, {
-            onOpenFrame: (name) => {
-                const framePath = dirPath + name
-                fileClick(framePath)
-            }
-        })
-        if (!animViewer) {
-            toastr.error('Could not create animation viewer')
-        }
+        viewer.setAnimationFrames(frameData)
     } catch (e) {
-        toastr.error(`Failed to load frames: ${e.message || e}`)
-        editorElement.innerHTML = ''
+        console.warn('[FB Anim] Failed to load siblings:', e?.message || e)
     }
 }
 

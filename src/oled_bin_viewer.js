@@ -43,6 +43,8 @@ export function parseOledBin(bytes) {
  * Convert SSD1306 page-major framebuffer to row-major MSB-first bitmap.
  * SSD1306: byte at [x + page*width], page = y/8, bit (y&7), LSB = top.
  * Row-major: byte at [y * bytesPerRow + x/8], bit 7-(x&7).
+ * Badge .fb files are stored with U8G2_R2 (180° rotation applied by the
+ * display controller), so we flip both axes to show the logical image.
  * @param {Uint8Array} fb - SSD1306 framebuffer (512 or 1024 bytes)
  * @param {number} width
  * @param {number} height
@@ -52,11 +54,13 @@ export function ssd1306ToRowMajor(fb, width, height) {
     const bytesPerRow = Math.ceil(width / 8)
     const out = new Uint8Array(bytesPerRow * height)
     for (let y = 0; y < height; y++) {
-        const page = y >> 3
-        const pageBit = y & 7
+        const srcY = (height - 1) - y
+        const srcPage = srcY >> 3
+        const srcBit = srcY & 7
         for (let x = 0; x < width; x++) {
-            const fbByte = fb[page * width + x]
-            if ((fbByte >> pageBit) & 1) {
+            const srcX = (width - 1) - x
+            const fbByte = fb[srcPage * width + srcX]
+            if ((fbByte >> srcBit) & 1) {
                 out[y * bytesPerRow + (x >> 3)] |= 1 << (7 - (x & 7))
             }
         }
@@ -66,6 +70,7 @@ export function ssd1306ToRowMajor(fb, width, height) {
 
 /**
  * Convert row-major MSB-first bitmap back to SSD1306 page-major framebuffer.
+ * Re-applies 180° flip (U8G2_R2) so the file matches what the badge expects.
  * @param {Uint8Array} bitmap - row-major bitmap
  * @param {number} width
  * @param {number} height
@@ -76,13 +81,15 @@ export function rowMajorToSsd1306(bitmap, width, height) {
     const fb = new Uint8Array(pages * width)
     const bytesPerRow = Math.ceil(width / 8)
     for (let y = 0; y < height; y++) {
-        const page = y >> 3
-        const pageBit = y & 7
+        const dstY = (height - 1) - y
+        const dstPage = dstY >> 3
+        const dstBit = dstY & 7
         for (let x = 0; x < width; x++) {
+            const dstX = (width - 1) - x
             const byteIdx = y * bytesPerRow + (x >> 3)
             const bit = 7 - (x & 7)
             if ((bitmap[byteIdx] >> bit) & 1) {
-                fb[page * width + x] |= 1 << pageBit
+                fb[dstPage * width + dstX] |= 1 << dstBit
             }
         }
     }
@@ -314,7 +321,9 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         clearTimeout(pushFramebufferTimeout)
         pushFramebufferTimeout = setTimeout(() => {
             pushFramebufferTimeout = 0
-            const fb = bitmapToSsd1306Framebuffer(bitmapCopy, width, height)
+            const fb = isFb
+                ? rowMajorToSsd1306(bitmapCopy, width, height)
+                : bitmapToSsd1306Framebuffer(bitmapCopy, width, height)
             try {
                 const p = options.onPushFramebuffer(fb)
                 if (p && typeof p.then === 'function') p.catch(() => {})
@@ -392,15 +401,6 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         uploadRegBtn.classList.add('oled-bin-upload-registry')
         uploadRegBtn.addEventListener('click', options.onUploadToRegistry)
         toolbar.appendChild(uploadRegBtn)
-    }
-    if (options.onAnimate) {
-        const animBtn = document.createElement('button')
-        animBtn.type = 'button'
-        animBtn.textContent = 'Animate'
-        animBtn.title = 'View this frame sequence as animation'
-        animBtn.classList.add('oled-bin-animate')
-        animBtn.addEventListener('click', options.onAnimate)
-        toolbar.appendChild(animBtn)
     }
     if (options.onPushFramebuffer) {
         const liveLabel = document.createElement('label')
@@ -634,6 +634,121 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     renderCanvas()
     schedulePushFramebuffer()
 
+    // Animation strip (populated async via setAnimationFrames)
+    let animStrip = null
+    let animFrames = []
+    let animPlaying = false
+    let animIntervalId = null
+    let animFps = 8
+    let animFrameIdx = 0
+    let animCurrentName = fn.split('/').pop()
+
+    function buildAnimStrip() {
+        if (animStrip) animStrip.remove()
+        if (!animFrames.length) return
+
+        animStrip = document.createElement('div')
+        animStrip.className = 'fb-anim-inline'
+
+        const toolbar = document.createElement('div')
+        toolbar.className = 'fb-anim-toolbar'
+
+        const playBtn = document.createElement('button')
+        playBtn.type = 'button'
+        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'
+        playBtn.title = 'Play animation (live to device)'
+        playBtn.addEventListener('click', () => animPlaying ? animStop() : animPlay())
+        toolbar.appendChild(playBtn)
+
+        const fpsLabel = document.createElement('label')
+        fpsLabel.className = 'fb-anim-fps-label'
+        fpsLabel.textContent = 'FPS:'
+        const fpsInput = document.createElement('input')
+        fpsInput.type = 'number'
+        fpsInput.min = 1
+        fpsInput.max = 30
+        fpsInput.value = String(animFps)
+        fpsInput.className = 'fb-anim-fps-input'
+        fpsInput.addEventListener('change', () => {
+            animFps = Math.max(1, Math.min(30, parseInt(fpsInput.value, 10) || 8))
+            fpsInput.value = String(animFps)
+            if (animPlaying) { animStop(); animPlay() }
+        })
+        fpsLabel.appendChild(fpsInput)
+        toolbar.appendChild(fpsLabel)
+
+        const frameCounter = document.createElement('span')
+        frameCounter.className = 'fb-anim-frame-counter'
+        toolbar.appendChild(frameCounter)
+
+        animStrip.appendChild(toolbar)
+
+        const thumbStrip = document.createElement('div')
+        thumbStrip.className = 'fb-anim-thumbstrip'
+
+        const thumbEls = animFrames.map((f, i) => {
+            const thumbWrap = document.createElement('div')
+            thumbWrap.className = 'fb-anim-thumb'
+            if (f.name === animCurrentName) thumbWrap.classList.add('active')
+            thumbWrap.title = f.name
+            const thumbCanvas = document.createElement('canvas')
+            thumbCanvas.style.imageRendering = 'pixelated'
+            const p = parseFbFile(f.bytes)
+            if (p) renderFbToCanvas(f.bytes, p.width, p.height, thumbCanvas)
+            thumbCanvas.style.width = '64px'
+            thumbCanvas.style.height = '32px'
+            thumbWrap.appendChild(thumbCanvas)
+            thumbWrap.addEventListener('click', () => {
+                if (f.onOpen) f.onOpen()
+            })
+            thumbStrip.appendChild(thumbWrap)
+            return thumbWrap
+        })
+        animStrip.appendChild(thumbStrip)
+
+        function updateCounter() {
+            frameCounter.textContent = `${animFrameIdx + 1} / ${animFrames.length}`
+            thumbEls.forEach((t, i) => t.classList.toggle('playing', i === animFrameIdx))
+        }
+
+        function animPlay() {
+            if (animPlaying) return
+            animPlaying = true
+            playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>'
+            animFrameIdx = animFrames.findIndex(f => f.name === animCurrentName)
+            if (animFrameIdx < 0) animFrameIdx = 0
+            updateCounter()
+            animIntervalId = setInterval(() => {
+                animFrameIdx = (animFrameIdx + 1) % animFrames.length
+                updateCounter()
+                if (options.onPushFramebuffer) {
+                    const f = animFrames[animFrameIdx]
+                    const p = parseFbFile(f.bytes)
+                    if (p) {
+                        // Push this frame's SSD1306 data directly to device
+                        try {
+                            const result = options.onPushFramebuffer(f.bytes)
+                            if (result && typeof result.then === 'function') result.catch(() => {})
+                        } catch (_) {}
+                    }
+                }
+            }, 1000 / animFps)
+        }
+
+        function animStop() {
+            if (!animPlaying) return
+            animPlaying = false
+            playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'
+            clearInterval(animIntervalId)
+            animIntervalId = null
+            // Push current editor frame back to device
+            schedulePushFramebuffer()
+        }
+
+        updateCounter()
+        container.appendChild(animStrip)
+    }
+
     targetElement.innerHTML = ''
     targetElement.appendChild(container)
 
@@ -652,6 +767,14 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
             const id = 'oledBinOnDirty_' + Math.random().toString(36).slice(2)
             window[id] = () => cb()
             container.dataset.onDirty = id
+        },
+        /**
+         * Populate the animation strip with sibling frames.
+         * @param {Array<{ name: string, bytes: Uint8Array, onOpen?: () => void }>} frames
+         */
+        setAnimationFrames(frames) {
+            animFrames = frames
+            buildAnimStrip()
         }
     }
 }
@@ -676,6 +799,7 @@ export function detectFrameSequence(fn, siblings) {
 
 /**
  * Render SSD1306 framebuffer bytes to a canvas element (for thumbnails/animation).
+ * Applies 180° flip (U8G2_R2) to show the logical image.
  * @param {Uint8Array} fbBytes - SSD1306 page-major framebuffer
  * @param {number} width
  * @param {number} height
@@ -687,10 +811,12 @@ function renderFbToCanvas(fbBytes, width, height, canvas) {
     const ctx = canvas.getContext('2d')
     const imgData = ctx.createImageData(width, height)
     for (let y = 0; y < height; y++) {
-        const page = y >> 3
-        const pageBit = y & 7
+        const srcY = (height - 1) - y
+        const srcPage = srcY >> 3
+        const srcBit = srcY & 7
         for (let x = 0; x < width; x++) {
-            const on = (fbBytes[page * width + x] >> pageBit) & 1
+            const srcX = (width - 1) - x
+            const on = (fbBytes[srcPage * width + srcX] >> srcBit) & 1
             const c = on ? 255 : 0
             const i = (y * width + x) * 4
             imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = c
