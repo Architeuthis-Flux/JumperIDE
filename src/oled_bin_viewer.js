@@ -647,11 +647,40 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
 
     function refreshCurrentThumb() {
         const idx = animFrames.findIndex(f => f.name === animCurrentName)
-        if (idx < 0 || !animThumbEls[idx]) return
+        if (idx < 0) return
+        const fb = rowMajorToSsd1306(bitmapCopy, width, height)
+        const frame = animFrames[idx]
+        if (frame) {
+            frame.bytes = fb
+            if (typeof frame.onEdited === 'function') frame.onEdited(fb)
+        }
+        if (!animThumbEls[idx]) return
         const thumbCanvas = animThumbEls[idx].querySelector('canvas')
         if (!thumbCanvas) return
-        const fb = rowMajorToSsd1306(bitmapCopy, width, height)
         renderFbToCanvas(fb, width, height, thumbCanvas)
+    }
+
+    /** Switch the editor in-place to a different frame in the sequence. */
+    function switchToFrame(name) {
+        if (name === animCurrentName) return
+        // Save current edits to cache
+        if (animStrip) refreshCurrentThumb()
+        // Find the target frame
+        const frame = animFrames.find(f => f.name === name)
+        if (!frame || !parseFbFile(frame.bytes)) return
+        // Load new frame into editor
+        animCurrentName = name
+        bitmapCopy = ssd1306ToRowMajor(frame.bytes, width, height)
+        dirty = false
+        inverted = false
+        renderCanvas()
+        schedulePushFramebuffer()
+        // Update info bar and thumb highlights
+        fn = name
+        updateInfo()
+        animThumbEls.forEach((t, i) => t.classList.toggle('active', animFrames[i].name === name))
+        // Notify app.js so tab title / editorFn / save target update
+        if (typeof options.onSwitchFrame === 'function') options.onSwitchFrame(name)
     }
 
     function buildAnimStrip() {
@@ -710,7 +739,8 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
             thumbCanvas.style.height = '32px'
             thumbWrap.appendChild(thumbCanvas)
             thumbWrap.addEventListener('click', () => {
-                if (f.onOpen) f.onOpen()
+                if (animPlaying) return
+                switchToFrame(f.name)
             })
             thumbStrip.appendChild(thumbWrap)
             return thumbWrap
@@ -772,6 +802,10 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
             if (isFb) return rowMajorToSsd1306(bitmapCopy, width, height)
             return buildOledBin(width, height, bitmapCopy, hasHeader)
         },
+        /** Current frame filename (changes when switching frames in the animation strip). */
+        getFrameName() {
+            return animCurrentName || fn.split('/').pop()
+        },
         setDirty(value) {
             dirty = !!value
         },
@@ -785,7 +819,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         },
         /**
          * Populate the animation strip with sibling frames.
-         * @param {Array<{ name: string, bytes: Uint8Array, onOpen?: () => void }>} frames
+         * @param {Array<{ name: string, bytes: Uint8Array, onEdited?: (bytes: Uint8Array) => void }>} frames
          */
         setAnimationFrames(frames) {
             animFrames = frames

@@ -727,14 +727,34 @@ async function _loadContent(fn, content, editorElement) {
                     if (v) showOledImageUploadModal(v.getBytes(), fn.split('/').pop().replace(/\.bin$/, '') || 'bitmap', overwrite)
                 }
             }
+            if (isFbFile) {
+                const dirPath = fn.includes('/') ? fn.slice(0, fn.lastIndexOf('/') + 1) : '/'
+                viewerOptions.onSwitchFrame = (newName) => {
+                    const oldFn = editorFn
+                    const newFn = dirPath + newName
+                    oledBinViewers.delete(oldFn)
+                    oledBinViewers.set(newFn, viewer)
+                    editorFn = newFn
+                    const tab = QS(`#editor-tabs [data-fn="${oldFn}"]`)
+                    if (tab) {
+                        tab.dataset.fn = newFn
+                        const title = tab.querySelector('.tab-title')
+                        if (title) {
+                            title.textContent = newName
+                            title.classList.remove('changed')
+                        }
+                    }
+                }
+            }
             const viewer = oledBinViewer(content, fn.split('/').pop(), editorElement, viewerOptions)
             if (viewer) {
                 oledBinViewers.set(fn, viewer)
                 editorFn = fn
                 viewer.setOnDirtyCallback(() => {
-                    const fileEl = QS(`#menu-file-tree [data-fn="${fn}"]`)
+                    const curFn = editorFn
+                    const fileEl = QS(`#menu-file-tree [data-fn="${curFn}"]`)
                     if (fileEl) fileEl.classList.add('changed')
-                    const tabTitle = QS(`#editor-tabs [data-fn="${fn}"] .tab-title`)
+                    const tabTitle = QS(`#editor-tabs [data-fn="${curFn}"] .tab-title`)
                     if (tabTitle) tabTitle.classList.add('changed')
                 })
                 if (isFbFile && port) loadFbAnimationStrip(fn, viewer)
@@ -810,22 +830,50 @@ export async function saveCurrentFile() {
             document.dispatchEvent(new CustomEvent('fileRenamed', { detail: { old: oldFn, new: fn } }))
         }
         const viewer = oledBinViewers.get(editorFn)
+        const dirPath = editorFn.includes('/') ? editorFn.slice(0, editorFn.lastIndexOf('/') + 1) : '/'
+
+        // Collect all dirty frames from the animation sequence cache
+        const framesToSave = []
+        // Current frame (always save — uses live editor bytes)
+        framesToSave.push({ path: editorFn, bytes: viewer.getBytes() })
+
+        // Other dirty frames in the same sequence
+        for (const [, entries] of _fbFrameCache) {
+            for (const entry of entries) {
+                const entryPath = dirPath + entry.name
+                if (entry.dirty && entryPath !== editorFn) {
+                    framesToSave.push({ path: entryPath, bytes: entry.bytes })
+                }
+            }
+        }
+
         const raw = await MpRawMode.begin(port)
         try {
             if (editorFn.includes('/')) {
                 const [dirname] = splitPath(editorFn)
                 await raw.makePath(dirname)
             }
-            await raw.writeFile(editorFn, viewer.getBytes())
+            for (const frame of framesToSave) {
+                await raw.writeFile(frame.path, frame.bytes)
+            }
             await _raw_updateFileTree(raw)
         } finally {
             await raw.end()
         }
+
+        // Clear dirty flags
         viewer.setDirty(false)
+        for (const [, entries] of _fbFrameCache) {
+            for (const entry of entries) {
+                entry.dirty = false
+            }
+        }
+
         document.dispatchEvent(new CustomEvent("fileSaved", { detail: { fn: editorFn } }))
         QS(`#menu-file-tree [data-fn="${editorFn}"]`)?.classList.remove("changed")
         QS(`#editor-tabs [data-fn="${editorFn}"] .tab-title`)?.classList.remove("changed")
-        toastr.success('File Saved')
+        const savedCount = framesToSave.length
+        toastr.success(savedCount > 1 ? `Saved ${savedCount} frames` : 'File Saved')
         return
     }
 
@@ -1970,6 +2018,13 @@ function updateApiRefFullWidthButton(container, btn) {
 }
 
 let _fbAnimStripGeneration = 0
+/** Shared cache: sequenceKey -> [{ name, bytes }]. Persists edited bytes across tab switches. */
+const _fbFrameCache = new Map()
+
+function fbFrameCacheKey(dirPath, prefix) {
+    return dirPath + '##' + prefix
+}
+
 /**
  * Detect .fb frame sequence siblings, load them from the device,
  * and populate the inline animation strip in the viewer.
@@ -1986,37 +2041,44 @@ async function loadFbAnimationStrip(fn, viewer) {
             if (sibDir === dirPath) siblings.push(sibFn.split('/').pop())
         }
     })
-    console.log('[FB Anim] file:', baseName, '| siblings:', siblings.length, '| dir:', dirPath)
     const seq = detectFrameSequence(baseName, siblings)
-    if (!seq || seq.frames.length < 2) {
-        console.log('[FB Anim] no sequence for', baseName, seq ? `(${seq.frames.length} frames)` : '(no match)')
+    if (!seq || seq.frames.length < 2) return
+
+    const cacheKey = fbFrameCacheKey(dirPath, seq.prefix)
+
+    const cached = _fbFrameCache.get(cacheKey)
+    if (cached && cached.length === seq.frames.length) {
+        const frameData = cached.map(f => ({
+            ...f,
+            onEdited: (bytes) => { f.bytes = bytes; f.dirty = true }
+        }))
+        viewer.setAnimationFrames(frameData)
         return
     }
-    console.log('[FB Anim] sequence:', seq.prefix, '| frames:', seq.frames.join(', '))
+
     if (!port) return
-    // Small delay so rapid tab switches don't pile up raw mode sessions
     await new Promise(r => setTimeout(r, 200))
     if (gen !== _fbAnimStripGeneration) return
     try {
         const raw = await MpRawMode.begin(port)
-        const frameData = []
+        const cacheEntries = []
         try {
             for (const frameName of seq.frames) {
                 if (gen !== _fbAnimStripGeneration) break
                 const framePath = dirPath + frameName
                 const bytes = await raw.readFile(framePath)
-                frameData.push({
-                    name: frameName,
-                    bytes,
-                    onOpen: () => fileClick(dirPath + frameName)
-                })
+                cacheEntries.push({ name: frameName, bytes })
             }
         } finally {
             await raw.end()
         }
-        if (gen === _fbAnimStripGeneration) {
-            viewer.setAnimationFrames(frameData)
-        }
+        if (gen !== _fbAnimStripGeneration) return
+        _fbFrameCache.set(cacheKey, cacheEntries)
+        const frameData = cacheEntries.map(f => ({
+            ...f,
+            onEdited: (bytes) => { f.bytes = bytes; f.dirty = true }
+        }))
+        viewer.setAnimationFrames(frameData)
     } catch (e) {
         console.warn('[FB Anim] Failed to load siblings:', e?.message || e)
     }
