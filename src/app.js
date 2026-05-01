@@ -1964,11 +1964,13 @@ function updateApiRefFullWidthButton(container, btn) {
     if (typeof dom !== 'undefined' && dom.watch) dom.watch()
 }
 
+let _fbAnimStripGeneration = 0
 /**
  * Detect .fb frame sequence siblings, load them from the device,
  * and populate the inline animation strip in the viewer.
  */
 async function loadFbAnimationStrip(fn, viewer) {
+    const gen = ++_fbAnimStripGeneration
     const baseName = fn.split('/').pop()
     const dirPath = fn.includes('/') ? fn.slice(0, fn.lastIndexOf('/') + 1) : '/'
     const siblings = []
@@ -1979,14 +1981,23 @@ async function loadFbAnimationStrip(fn, viewer) {
             if (sibDir === dirPath) siblings.push(sibFn.split('/').pop())
         }
     })
+    console.log('[FB Anim] file:', baseName, '| siblings:', siblings.length, '| dir:', dirPath)
     const seq = detectFrameSequence(baseName, siblings)
-    if (!seq || seq.frames.length < 2) return
+    if (!seq || seq.frames.length < 2) {
+        console.log('[FB Anim] no sequence for', baseName, seq ? `(${seq.frames.length} frames)` : '(no match)')
+        return
+    }
+    console.log('[FB Anim] sequence:', seq.prefix, '| frames:', seq.frames.join(', '))
     if (!port) return
+    // Small delay so rapid tab switches don't pile up raw mode sessions
+    await new Promise(r => setTimeout(r, 200))
+    if (gen !== _fbAnimStripGeneration) return
     try {
         const raw = await MpRawMode.begin(port)
         const frameData = []
         try {
             for (const frameName of seq.frames) {
+                if (gen !== _fbAnimStripGeneration) break
                 const framePath = dirPath + frameName
                 const bytes = await raw.readFile(framePath)
                 frameData.push({
@@ -1998,7 +2009,9 @@ async function loadFbAnimationStrip(fn, viewer) {
         } finally {
             await raw.end()
         }
-        viewer.setAnimationFrames(frameData)
+        if (gen === _fbAnimStripGeneration) {
+            viewer.setAnimationFrames(frameData)
+        }
     } catch (e) {
         console.warn('[FB Anim] Failed to load siblings:', e?.message || e)
     }

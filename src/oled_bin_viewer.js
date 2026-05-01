@@ -784,11 +784,21 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
  * e.g. "fly_02.fb" with siblings ["fly_01.fb","fly_02.fb",...,"fly_06.fb"]
  * Returns { prefix, frames: [sorted filenames] } or null.
  */
+/**
+ * Detect animation frame sequence from a filename + sibling list.
+ * Uses greedy prefix match: "fly_02.fb" → prefix "fly", matches fly_01..fly_06.
+ * @param {string} fn - current filename (basename only)
+ * @param {string[]} siblings - all filenames in the same directory
+ * @returns {{ prefix: string, ext: string, frames: string[] } | null}
+ */
 export function detectFrameSequence(fn, siblings) {
-    const m = fn.match(/^(.+?)_(\d+)(\.\w+)$/)
+    // Greedy match: take everything up to the LAST underscore-digits before extension
+    const m = fn.match(/^(.+)_(\d+)(\.\w+)$/)
     if (!m) return null
     const [, prefix, , ext] = m
-    const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)${ext.replace(/\./g, '\\.')}$`)
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const extEscaped = ext.replace(/\./g, '\\.')
+    const re = new RegExp(`^${escaped}_(\\d+)${extEscaped}$`)
     const frames = siblings.filter(s => re.test(s)).sort((a, b) => {
         const na = parseInt(a.match(re)[1], 10)
         const nb = parseInt(b.match(re)[1], 10)
