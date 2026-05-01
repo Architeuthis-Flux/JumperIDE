@@ -3,7 +3,8 @@ import { QID } from './utils.js'
 /** Default doc sites shown in the docs sidebar (name + url). */
 const DEFAULT_CUSTOM_DOC_SITES = [
     { name: 'MicroPython', url: 'https://docs.micropython.org/en/latest/library/index.html#python-standard-libraries-and-micro-libraries' },
-    { name: 'Jumperless API', url: 'https://docs.jumperless.org/09.5-micropythonAPIreference/' }
+    { name: 'Jumperless API', url: 'https://docs.jumperless.org/09.5-micropythonAPIreference/' },
+    { name: 'Badge API', url: 'https://docs.jumperless.org/badge-api-reference/' }
 ]
 
 const settingsElement = QID("menu-settings")

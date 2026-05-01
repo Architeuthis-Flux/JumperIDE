@@ -33,6 +33,7 @@ import { MicroPythonWASM } from './emulator.js'
 import { getSetting, onSettingChange, updateSetting, getCustomDocSites, setCustomDocSites, getSelectedDocIndex, setSelectedDocIndex } from './settings.js'
 import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROPYTHON } from './apiRefMicroPython.js'
+import { getBadgeAnchor } from './apiRefBadge.js'
 import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
 import { getTerminalOptions } from './terminal_utils.js'
 
@@ -1547,6 +1548,16 @@ function getDocSiteIndexByOrigin(origin) {
     return -1
 }
 
+/** Find first doc site index whose URL contains the given path fragment. Returns -1 if none. */
+function getDocSiteIndexByUrl(pathFragment) {
+    const sites = getCustomDocSites()
+    for (let i = 0; i < sites.length; i++) {
+        const u = sites[i]?.url || ''
+        if (u.includes(pathFragment)) return i
+    }
+    return -1
+}
+
 function refreshApiRefDocPicker() {
     const picker = QID('api-ref-doc-picker')
     const link = QID('api-ref-docs-link')
@@ -1582,6 +1593,7 @@ const API_REF_SCROLL_COOLDOWN_MS = 500
 const API_REF_OUR_DOCS_ORIGIN = 'https://docs.jumperless.org'
 const API_REF_MICROPYTHON_ORIGIN = 'https://docs.micropython.org'
 const API_REF_MICROPYTHON_LIBRARY_PATH = '/en/latest/library/'
+const API_REF_BADGE_DOC_PATH = '/badge-api-reference/'
 
 /** Resolve editor word to MicroPython docs URL when base is docs.micropython.org. Returns { pageUrl, anchor, confident }. */
 function wordToMicroPythonDocUrl(word, base) {
@@ -1724,6 +1736,18 @@ function getWordAtPosition(editor, pos) {
     return doc.slice(start, end)
 }
 
+function navigateToBadgeDoc(iframe, word, badgeAnchor) {
+    const badgeIdx = getDocSiteIndexByUrl(API_REF_BADGE_DOC_PATH)
+    if (badgeIdx < 0) return false
+    setSelectedDocIndex(badgeIdx)
+    refreshApiRefDocPicker()
+    const badgeBase = getCurrentDocUrl().replace(/#.*$/, '').replace(/\/?$/, '')
+    const url = badgeBase + '#' + badgeAnchor
+    console.log('[API Ref] Badge API: word:', word, '->', url)
+    applyApiRefNavigation(iframe, badgeBase, url, badgeAnchor, true, word, true)
+    return true
+}
+
 function syncApiRefToClicked(editor, posOverride) {
     const panel = QID('api-ref-panel')
     const goToClickedEl = QID('api-ref-go-to-clicked')
@@ -1737,6 +1761,7 @@ function syncApiRefToClicked(editor, posOverride) {
     ensureApiRefIframeLoadHandler(iframe)
 
     const isMicroPython = base.includes(API_REF_MICROPYTHON_ORIGIN)
+    const isBadgePage = base.includes(API_REF_BADGE_DOC_PATH.replace(/\/$/, ''))
     let url, anchor, confident, useAnchor
 
     if (isMicroPython) {
@@ -1749,6 +1774,10 @@ function syncApiRefToClicked(editor, posOverride) {
             console.log('[API Ref] MicroPython: word:', word, '->', url, '(confident)')
             applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
             return
+        }
+        const badgeAnchor = getBadgeAnchor(word)
+        if (badgeAnchor) {
+            if (navigateToBadgeDoc(iframe, word, badgeAnchor)) return
         }
         const our = wordToApiRefAnchor(word)
         if (our.confident && our.anchor) {
@@ -1771,6 +1800,18 @@ function syncApiRefToClicked(editor, posOverride) {
         return
     }
 
+    if (isBadgePage) {
+        const badgeAnchor = getBadgeAnchor(word)
+        if (badgeAnchor) {
+            anchor = badgeAnchor
+            confident = true
+            url = base + '#' + anchor
+            useAnchor = true
+            applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
+            return
+        }
+    }
+
     const our = wordToApiRefAnchor(word)
     if (our.confident && our.anchor && !JUMPERLESS_FORCE_MICROPYTHON.includes(word)) {
         anchor = our.anchor
@@ -1779,6 +1820,10 @@ function syncApiRefToClicked(editor, posOverride) {
         useAnchor = true
         applyApiRefNavigation(iframe, base, url, anchor, useAnchor, word, confident)
         return
+    }
+    const badgeAnchor = getBadgeAnchor(word)
+    if (badgeAnchor && !isBadgePage) {
+        if (navigateToBadgeDoc(iframe, word, badgeAnchor)) return
     }
     const mpEntry = getMicroPythonSymbolEntry(word)
     if (mpEntry) {
