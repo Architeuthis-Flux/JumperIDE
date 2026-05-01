@@ -579,6 +579,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
 
     function notifyDirty() {
         dirty = true
+        if (animStrip) refreshCurrentThumb()
         if (container.dataset.onDirty) {
             try {
                 const cb = window[container.dataset.onDirty]
@@ -642,6 +643,16 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     let animFps = 8
     let animFrameIdx = 0
     let animCurrentName = fn.split('/').pop()
+    let animThumbEls = []
+
+    function refreshCurrentThumb() {
+        const idx = animFrames.findIndex(f => f.name === animCurrentName)
+        if (idx < 0 || !animThumbEls[idx]) return
+        const thumbCanvas = animThumbEls[idx].querySelector('canvas')
+        if (!thumbCanvas) return
+        const fb = rowMajorToSsd1306(bitmapCopy, width, height)
+        renderFbToCanvas(fb, width, height, thumbCanvas)
+    }
 
     function buildAnimStrip() {
         if (animStrip) animStrip.remove()
@@ -686,7 +697,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         const thumbStrip = document.createElement('div')
         thumbStrip.className = 'fb-anim-thumbstrip'
 
-        const thumbEls = animFrames.map((f, i) => {
+        animThumbEls = animFrames.map((f, i) => {
             const thumbWrap = document.createElement('div')
             thumbWrap.className = 'fb-anim-thumb'
             if (f.name === animCurrentName) thumbWrap.classList.add('active')
@@ -708,7 +719,15 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
 
         function updateCounter() {
             frameCounter.textContent = `${animFrameIdx + 1} / ${animFrames.length}`
-            thumbEls.forEach((t, i) => t.classList.toggle('playing', i === animFrameIdx))
+            animThumbEls.forEach((t, i) => t.classList.toggle('playing', i === animFrameIdx))
+        }
+
+        function getFrameBytes(idx) {
+            const f = animFrames[idx]
+            if (f.name === animCurrentName) {
+                return rowMajorToSsd1306(bitmapCopy, width, height)
+            }
+            return f.bytes
         }
 
         function animPlay() {
@@ -722,15 +741,11 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
                 animFrameIdx = (animFrameIdx + 1) % animFrames.length
                 updateCounter()
                 if (options.onPushFramebuffer) {
-                    const f = animFrames[animFrameIdx]
-                    const p = parseFbFile(f.bytes)
-                    if (p) {
-                        // Push this frame's SSD1306 data directly to device
-                        try {
-                            const result = options.onPushFramebuffer(f.bytes)
-                            if (result && typeof result.then === 'function') result.catch(() => {})
-                        } catch (_) {}
-                    }
+                    const fb = getFrameBytes(animFrameIdx)
+                    try {
+                        const result = options.onPushFramebuffer(fb)
+                        if (result && typeof result.then === 'function') result.catch(() => {})
+                    } catch (_) {}
                 }
             }, 1000 / animFps)
         }

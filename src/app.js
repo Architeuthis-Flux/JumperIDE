@@ -579,6 +579,7 @@ function _updateFileTree(fs_tree, fs_stats)
     fileTree.addEventListener('click', (e) => {
         const toggle = e.target.closest('.tree-folder-toggle')
         if (!toggle) return
+        e.preventDefault()
         const path = toggle.dataset.path
         const children = fileTree.querySelector(`.tree-folder-children[data-folder-path="${path}"]`)
         if (!children) return
@@ -586,8 +587,12 @@ function _updateFileTree(fs_tree, fs_stats)
         children.style.display = isHidden ? '' : 'none'
         const chevron = toggle.querySelector('.tree-folder-chevron')
         if (chevron) {
-            chevron.classList.toggle('fa-chevron-right', !isHidden)
-            chevron.classList.toggle('fa-chevron-down', isHidden)
+            // FA SVG core uses data-icon attr; swap the icon by replacing the element
+            const newIcon = isHidden ? 'fa-chevron-down' : 'fa-chevron-right'
+            const i = document.createElement('i')
+            i.className = `fa-solid ${newIcon} fa-fw tree-folder-chevron`
+            chevron.replaceWith(i)
+            if (typeof dom !== 'undefined' && dom.watch) dom.watch()
         }
     })
 
