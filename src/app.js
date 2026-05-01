@@ -516,16 +516,25 @@ function _updateFileTree(fs_tree, fs_stats)
         <a href="#" class="menu-action" title="Create" onclick="app.createNewFile('/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
         <span class="menu-action">${T('files.used')} ${sizeFmt(fs_used,0)} / ${sizeFmt(fs_size,0)}</span>
     </div>`
-    function traverse(node, depth) {
+    const AUTO_COLLAPSE_FOLDERS = ['zigmoji']
+    function traverse(node, depth, container) {
+        const target = container || fileTree
         const offset = '&emsp;'.repeat(depth)
         for (const n of sorted(node)) {
             if ('content' in n) {
-                fileTree.insertAdjacentHTML('beforeend', `<div>
-                    ${offset}<span class="folder name"><i class="fa-solid fa-folder fa-fw"></i> ${n.name}</span>
+                const collapsed = AUTO_COLLAPSE_FOLDERS.includes(n.name.toLowerCase())
+                const chevron = collapsed ? 'fa-chevron-right' : 'fa-chevron-down'
+                target.insertAdjacentHTML('beforeend', `<div>
+                    ${offset}<span class="folder name tree-folder-toggle" data-path="${n.path}"><i class="fa-solid ${chevron} fa-fw tree-folder-chevron"></i> ${n.name}</span>
                     <a href="#" class="menu-action" title="Remove" onclick="app.removeDir('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
                     <a href="#" class="menu-action" title="Create" onclick="app.createNewFile('${n.path}/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
                 </div>`)
-                traverse(n.content, depth+1)
+                const childrenWrap = document.createElement('div')
+                childrenWrap.className = 'tree-folder-children'
+                childrenWrap.dataset.folderPath = n.path
+                if (collapsed) childrenWrap.style.display = 'none'
+                target.appendChild(childrenWrap)
+                traverse(n.content, depth+1, childrenWrap)
             } else {
                 /* TODO ••• */
                 let icon;
@@ -548,11 +557,11 @@ function _updateFileTree(fs_tree, fs_stats)
                 let sel = ([editorFn, `/${editorFn}`, `/flash/${editorFn}`].includes(n.path)) ? 'selected' : ''
                 if (n.path.startsWith("/proc/") || n.path.startsWith("/dev/")) {
                     icon = '<i class="fa-solid fa-gear fa-fw"></i>'
-                    fileTree.insertAdjacentHTML('beforeend', `<div>
+                    target.insertAdjacentHTML('beforeend', `<div>
                         ${offset}<span>${icon} ${n.name}&nbsp;</span>
                     </div>`)
                 } else {
-                    fileTree.insertAdjacentHTML('beforeend', `<div>
+                    target.insertAdjacentHTML('beforeend', `<div>
                         ${offset}<a href="#" class="name ${sel}" data-fn="${n.path}" onclick="app.fileClick('${n.path}');return false;">${icon} ${n.name}&nbsp;</a>
                         <a href="#" class="menu-action" title="Remove" onclick="app.removeFile('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
                         <span class="menu-action">${sizeFmt(n.size)}</span>
@@ -562,6 +571,21 @@ function _updateFileTree(fs_tree, fs_stats)
         }
     }
     traverse(fs_tree, 1)
+
+    fileTree.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.tree-folder-toggle')
+        if (!toggle) return
+        const path = toggle.dataset.path
+        const children = fileTree.querySelector(`.tree-folder-children[data-folder-path="${path}"]`)
+        if (!children) return
+        const isHidden = children.style.display === 'none'
+        children.style.display = isHidden ? '' : 'none'
+        const chevron = toggle.querySelector('.tree-folder-chevron')
+        if (chevron) {
+            chevron.classList.toggle('fa-chevron-right', !isHidden)
+            chevron.classList.toggle('fa-chevron-down', isHidden)
+        }
+    })
 
     for (let fn of changed_files) {
         QS(`#menu-file-tree [data-fn="${fn}"]`).classList.add("changed")

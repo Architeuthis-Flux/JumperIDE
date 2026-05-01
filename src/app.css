@@ -964,6 +964,18 @@ body.sidebar-resizing * {
     white-space: nowrap;
 }
 
+#menu-file-tree .tree-folder-toggle {
+    cursor: pointer;
+    user-select: none;
+}
+
+#menu-file-tree .tree-folder-chevron {
+    font-size: 0.7em;
+    width: 1em;
+    text-align: center;
+    transition: transform 0.1s;
+}
+
 #menu-file-tree div .open::after {
     content: "●";
     color: #666;
