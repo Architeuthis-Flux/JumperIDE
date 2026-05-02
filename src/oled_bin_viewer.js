@@ -212,6 +212,7 @@ export function pngToOledBin(file, options = {}) {
  * SSD1306 is page-major: each page = 8 rows, 128 bytes per page (one per column).
  * Within each byte: LSB = top pixel, MSB = bottom (of that 8-pixel column).
  * Always returns 512 (128×32) or 1024 (128×64) bytes; crops/pads from bitmap as needed.
+ * Applies 180° flip (U8G2_R2) so the badge's rotateFramebuffer180 cancels it out.
  * @param {Uint8Array} bitmap - row-major bitmap (no header)
  * @param {number} width
  * @param {number} height
@@ -221,13 +222,14 @@ export function bitmapToSsd1306Framebuffer(bitmap, width, height) {
     const outHeight = height > 32 ? 64 : 32
     const fb = new Uint8Array(outHeight === 32 ? 512 : 1024)
     for (let y = 0; y < outHeight; y++) {
+        const dstY = (outHeight - 1) - y
+        const dstPage = dstY >> 3
+        const dstBit = dstY & 7
         for (let x = 0; x < 128; x++) {
+            const dstX = 127 - x
             const p = getPixel(bitmap, width, height, x, y)
-            const byteIdx = (y >> 3) * 128 + x
-            const bit = y & 7
-            if (p) fb[byteIdx] |= 1 << bit
-            else fb[byteIdx] &= ~(1 << bit)
-            }
+            if (p) fb[dstPage * 128 + dstX] |= 1 << dstBit
+        }
     }
     return fb
 }
