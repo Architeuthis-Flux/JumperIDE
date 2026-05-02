@@ -222,7 +222,7 @@ function _addNewFileButton() {
     menu.innerHTML = `
         <a class="new-tab-menu-item" id="ntm-terminal" href="#"><i class="fa-solid fa-terminal fa-fw"></i> Terminal</a>
         <a class="new-tab-menu-item ${connected ? '' : 'ntm-disabled'}" id="ntm-file" href="#"><i class="fa-solid fa-file fa-fw"></i> File</a>
-        <a class="new-tab-menu-item ${connected ? '' : 'ntm-disabled'}" id="ntm-image" href="#"><i class="fa-solid fa-image fa-fw"></i> Image</a>
+        <a class="new-tab-menu-item" id="ntm-image" href="#"><i class="fa-solid fa-image fa-fw"></i> Image</a>
     `
     document.body.appendChild(menu)
 
@@ -230,8 +230,7 @@ function _addNewFileButton() {
 
     function openMenu() {
         // Update disabled state each time
-        menu.querySelector('#ntm-file').className  = `new-tab-menu-item ${connected ? '' : 'ntm-disabled'}`
-        menu.querySelector('#ntm-image').className = `new-tab-menu-item ${connected ? '' : 'ntm-disabled'}`
+        menu.querySelector('#ntm-file').className = `new-tab-menu-item ${connected ? '' : 'ntm-disabled'}`
 
         // Position menu below the + button
         const rect = plusBtn.getBoundingClientRect()
