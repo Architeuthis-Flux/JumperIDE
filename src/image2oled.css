@@ -134,7 +134,13 @@ body.i2o-embedded .i2o-back {
     font: inherit;
 }
 
-.i2o-custom-scale input[type="range"] {
+.i2o-custom-scale-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.i2o-custom-scale-group input[type="range"] {
     width: 14rem;
 }
 

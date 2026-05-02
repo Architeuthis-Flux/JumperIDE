@@ -88,9 +88,18 @@
                         <option value="custom">Custom scale</option>
                     </select>
                 </div>
-                <div class="i2o-row i2o-custom-scale" id="custom-scale-row" hidden>
-                    <label>Scale <span id="custom-scale-value">100</span>%</label>
-                    <input type="range" id="custom-scale" min="1" max="400" value="100">
+                <div class="i2o-custom-scale-group" id="custom-scale-group" hidden>
+                    <div class="i2o-row">
+                        <label>Scale X <span id="scale-x-value">100</span>%</label>
+                        <input type="range" id="scale-x" min="1" max="400" value="100">
+                    </div>
+                    <div class="i2o-row">
+                        <label>Scale Y <span id="scale-y-value">100</span>%</label>
+                        <input type="range" id="scale-y" min="1" max="400" value="100">
+                    </div>
+                    <div class="i2o-row">
+                        <label><input type="checkbox" id="link-scale" checked> Link X and Y</label>
+                    </div>
                 </div>
                 <div class="i2o-row">
                     <label>Center image</label>

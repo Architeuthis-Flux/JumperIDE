@@ -2688,6 +2688,9 @@ Connect your Jumperless board and start coding!
     window.addEventListener('message', (e) => {
         if (e.data?.type === 'jumperide-open-bin' && e.data?.bin) {
             openBinFromImage2Oled(e.data.bin, e.data.path, e.data.registryEdit || null)
+        } else if (e.data?.type === 'jumperide-push-fb' && e.data?.fb) {
+            const fb = Uint8Array.from(atob(e.data.fb), c => c.charCodeAt(0))
+            sendOledFramebufferToDevice(fb)
         }
     })
 

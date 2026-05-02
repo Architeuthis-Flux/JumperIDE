@@ -18,14 +18,17 @@ const brightness = document.getElementById('brightness')
 const brightnessValue = document.getElementById('brightness-value')
 const contrast = document.getElementById('contrast')
 const contrastValue = document.getElementById('contrast-value')
-const filter = document.getElementById('filter')
+const filterSelect = document.getElementById('filter')
 const dithering = document.getElementById('dithering')
 const threshold = document.getElementById('threshold')
 const thresholdValue = document.getElementById('threshold-value')
 const scaling = document.getElementById('scaling')
-const customScaleRow = document.getElementById('custom-scale-row')
-const customScale = document.getElementById('custom-scale')
-const customScaleValue = document.getElementById('custom-scale-value')
+const customScaleGroup = document.getElementById('custom-scale-group')
+const scaleX = document.getElementById('scale-x')
+const scaleXValue = document.getElementById('scale-x-value')
+const scaleY = document.getElementById('scale-y')
+const scaleYValue = document.getElementById('scale-y-value')
+const linkScale = document.getElementById('link-scale')
 const centerH = document.getElementById('center-h')
 const centerV = document.getElementById('center-v')
 const rotate = document.getElementById('rotate')
@@ -36,7 +39,6 @@ const previewCanvas = document.getElementById('preview-canvas')
 const outputInfo = document.getElementById('output-info')
 const btnDownload = document.getElementById('btn-download')
 const btnOpenIde = document.getElementById('btn-open-ide')
-const btnDownloadFbZip = document.getElementById('btn-download-fb-zip')
 const framesSection = document.getElementById('frames-section')
 const frameStrip = document.getElementById('frame-strip')
 const frameCounter = document.getElementById('frame-counter')
@@ -49,11 +51,24 @@ let selectedFrameIdx = 0
 let animIntervalId = null
 
 scaling.addEventListener('change', () => {
-    customScaleRow.hidden = scaling.value !== 'custom'
+    customScaleGroup.hidden = scaling.value !== 'custom'
 })
 
-customScale.addEventListener('input', () => {
-    customScaleValue.textContent = customScale.value
+scaleX.addEventListener('input', () => {
+    scaleXValue.textContent = scaleX.value
+    if (linkScale.checked) {
+        scaleY.value = scaleX.value
+        scaleYValue.textContent = scaleX.value
+    }
+    updateFrameStripAndPreview()
+})
+
+scaleY.addEventListener('input', () => {
+    scaleYValue.textContent = scaleY.value
+    if (linkScale.checked) {
+        scaleX.value = scaleY.value
+        scaleXValue.textContent = scaleY.value
+    }
     updateFrameStripAndPreview()
 })
 
@@ -82,11 +97,12 @@ function getSettings() {
         invert: invertCheck.checked,
         brightness: parseInt(brightness.value, 10),
         contrast: parseInt(contrast.value, 10),
-        filter: filter.value,
+        filter: filterSelect.value,
         dithering: dithering.value,
         threshold: parseInt(threshold.value, 10),
         scaling: scaling.value,
-        customScale: parseInt(customScale.value, 10) / 100,
+        scaleX: parseInt(scaleX.value, 10) / 100,
+        scaleY: parseInt(scaleY.value, 10) / 100,
         centerH: centerH.checked,
         centerV: centerV.checked,
         rotate: parseInt(rotate.value, 10),
@@ -109,8 +125,6 @@ function drawImageToCanvas(img, opts) {
     ctx.fillStyle = bgFill
     ctx.fillRect(0, 0, cw, ch)
 
-    let _sw = iw
-    let _sh = ih
     let dx = 0
     let dy = 0
     let dw = cw
@@ -122,9 +136,8 @@ function drawImageToCanvas(img, opts) {
         dx = 0
         dy = 0
     } else if (scaleMode === 'custom') {
-        const s = opts.customScale || 1
-        dw = Math.round(iw * s)
-        dh = Math.round(ih * s)
+        dw = Math.round(iw * (opts.scaleX || 1))
+        dh = Math.round(ih * (opts.scaleY || 1))
         dx = chCenter ? (cw - dw) / 2 : 0
         dy = cvCenter ? (ch - dh) / 2 : 0
     } else if (scaleMode === 'fit' || scaleMode === 'fill' || scaleMode === 'original') {
@@ -264,7 +277,7 @@ function ditherOrdered(gray, width, height) {
         for (let x = 0; x < width; x++) {
             const i = y * width + x
             const bayerVal = (BAYER4[(y & 3) * 4 + (x & 3)] / 16 - 0.5) * 255
-            buf[i] = gray[i] + bayerVal >= 128 ? 255 : 0
+            buf[i] = (gray[i] + bayerVal) >= 128 ? 255 : 0
         }
     }
     return buf
@@ -440,6 +453,19 @@ function updateFrameStrip() {
     })
 }
 
+let pushDebounceId = 0
+const PUSH_DEBOUNCE_MS = 80
+
+function pushToDevice(result) {
+    if (window === window.top) return
+    clearTimeout(pushDebounceId)
+    pushDebounceId = setTimeout(() => {
+        const fb = rowMajorToSsd1306(result.bitmap, result.width, result.height)
+        const b64 = btoa(String.fromCharCode.apply(null, fb))
+        window.parent.postMessage({ type: 'jumperide-push-fb', fb: b64, width: result.width, height: result.height }, '*')
+    }, PUSH_DEBOUNCE_MS)
+}
+
 function updatePreview() {
     stopAnimation()
     const result = generate()
@@ -468,6 +494,7 @@ function updatePreview() {
     } else {
         outputInfo.textContent = `${width}×${height} pixels, ${bin.length} bytes (4-byte header + bitmap).`
     }
+    pushToDevice(result)
     return result
 }
 
@@ -570,6 +597,7 @@ btnPlayFrames.addEventListener('click', () => {
         frameStrip.querySelectorAll('.i2o-frame-thumb').forEach((el, i) => {
             el.classList.toggle('selected', i === idx)
         })
+        pushToDevice(result)
     }, parseInt(frameDelay.value, 10) || 150)
 })
 
@@ -578,7 +606,7 @@ threshold.addEventListener('input', () => {
     updateFrameStripAndPreview()
 })
 
-;[canvasWidth, canvasHeight, bgColor, invertCheck, filter, dithering, scaling, centerH, centerV, rotate, flipH, flipV].forEach(el => {
+;[canvasWidth, canvasHeight, bgColor, invertCheck, filterSelect, dithering, scaling, centerH, centerV, rotate, flipH, flipV].forEach(el => {
     el.addEventListener('change', updateFrameStripAndPreview)
     el.addEventListener('input', updateFrameStripAndPreview)
 })
