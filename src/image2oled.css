@@ -134,6 +134,10 @@ body.i2o-embedded .i2o-back {
     font: inherit;
 }
 
+.i2o-custom-scale input[type="range"] {
+    width: 14rem;
+}
+
 .i2o-inline {
     display: inline-flex;
     flex-wrap: wrap;
@@ -209,4 +213,120 @@ body.i2o-embedded .i2o-back {
 
 .i2o-btn-primary:hover:not(:disabled) {
     background: rgba(255,165,0,0.25);
+}
+
+.i2o-btn-sm {
+    padding: 4px 10px;
+    font-size: 0.8rem;
+}
+
+.i2o-btn-danger {
+    border-color: rgba(255, 80, 80, 0.4);
+    color: #f66;
+}
+
+.i2o-btn-danger:hover:not(:disabled) {
+    background: rgba(255, 80, 80, 0.12);
+}
+
+.i2o-drop-hint {
+    margin: 0.5rem 0 0;
+    opacity: 0.5;
+    font-size: 0.8rem;
+}
+
+/* Frame strip */
+.i2o-frames-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.i2o-frames-toolbar label {
+    font-size: 0.85rem;
+}
+
+.i2o-frames-toolbar input[type="number"] {
+    width: 4em;
+    padding: 3px 5px;
+    background: var(--bg-color);
+    color: var(--fg-color);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.i2o-frame-count {
+    font-weight: 400;
+    opacity: 0.6;
+    font-size: 0.85rem;
+}
+
+.i2o-frame-strip {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 2px;
+}
+
+.i2o-frame-thumb {
+    flex-shrink: 0;
+    cursor: pointer;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    padding: 2px;
+    position: relative;
+    transition: border-color 0.15s;
+    background: #0a0a0a;
+}
+
+.i2o-frame-thumb:hover {
+    border-color: rgba(255,255,255,0.3);
+}
+
+.i2o-frame-thumb.selected {
+    border-color: var(--fg-color-highlight, orange);
+}
+
+.i2o-frame-thumb canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+}
+
+.i2o-frame-label {
+    font-size: 0.65rem;
+    text-align: center;
+    opacity: 0.6;
+    margin-top: 2px;
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.i2o-frame-remove {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #c33;
+    color: #fff;
+    border: none;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    padding: 0;
+    display: none;
+}
+
+.i2o-frame-thumb:hover .i2o-frame-remove {
+    display: block;
 }

@@ -14,9 +14,18 @@ const canvasWidth = document.getElementById('canvas-width')
 const canvasHeight = document.getElementById('canvas-height')
 const bgColor = document.getElementById('bg-color')
 const invertCheck = document.getElementById('invert')
+const brightness = document.getElementById('brightness')
+const brightnessValue = document.getElementById('brightness-value')
+const contrast = document.getElementById('contrast')
+const contrastValue = document.getElementById('contrast-value')
+const filter = document.getElementById('filter')
+const dithering = document.getElementById('dithering')
 const threshold = document.getElementById('threshold')
 const thresholdValue = document.getElementById('threshold-value')
 const scaling = document.getElementById('scaling')
+const customScaleRow = document.getElementById('custom-scale-row')
+const customScale = document.getElementById('custom-scale')
+const customScaleValue = document.getElementById('custom-scale-value')
 const centerH = document.getElementById('center-h')
 const centerV = document.getElementById('center-v')
 const rotate = document.getElementById('rotate')
@@ -27,9 +36,41 @@ const previewCanvas = document.getElementById('preview-canvas')
 const outputInfo = document.getElementById('output-info')
 const btnDownload = document.getElementById('btn-download')
 const btnOpenIde = document.getElementById('btn-open-ide')
+const btnDownloadFbZip = document.getElementById('btn-download-fb-zip')
+const framesSection = document.getElementById('frames-section')
+const frameStrip = document.getElementById('frame-strip')
+const frameCounter = document.getElementById('frame-counter')
+const frameDelay = document.getElementById('frame-delay')
+const btnPlayFrames = document.getElementById('btn-play-frames')
 
-let currentFile = null
-let currentImage = null
+/** @type {{ name: string, img: HTMLImageElement }[]} */
+let frames = []
+let selectedFrameIdx = 0
+let animIntervalId = null
+
+scaling.addEventListener('change', () => {
+    customScaleRow.hidden = scaling.value !== 'custom'
+})
+
+customScale.addEventListener('input', () => {
+    customScaleValue.textContent = customScale.value
+    updateFrameStripAndPreview()
+})
+
+brightness.addEventListener('input', () => {
+    brightnessValue.textContent = brightness.value
+    updateFrameStripAndPreview()
+})
+
+contrast.addEventListener('input', () => {
+    contrastValue.textContent = contrast.value
+    updateFrameStripAndPreview()
+})
+
+function updateFrameStripAndPreview() {
+    if (frames.length > 1) updateFrameStrip()
+    updatePreview()
+}
 
 function getSettings() {
     const cw = Math.max(1, Math.min(128, parseInt(canvasWidth.value, 10) || 128))
@@ -39,8 +80,13 @@ function getSettings() {
         height: ch,
         bg: bgColor.value,
         invert: invertCheck.checked,
+        brightness: parseInt(brightness.value, 10),
+        contrast: parseInt(contrast.value, 10),
+        filter: filter.value,
+        dithering: dithering.value,
         threshold: parseInt(threshold.value, 10),
         scaling: scaling.value,
+        customScale: parseInt(customScale.value, 10) / 100,
         centerH: centerH.checked,
         centerV: centerV.checked,
         rotate: parseInt(rotate.value, 10),
@@ -75,6 +121,12 @@ function drawImageToCanvas(img, opts) {
         dh = ch
         dx = 0
         dy = 0
+    } else if (scaleMode === 'custom') {
+        const s = opts.customScale || 1
+        dw = Math.round(iw * s)
+        dh = Math.round(ih * s)
+        dx = chCenter ? (cw - dw) / 2 : 0
+        dy = cvCenter ? (ch - dh) / 2 : 0
     } else if (scaleMode === 'fit' || scaleMode === 'fill' || scaleMode === 'original') {
         const scale = scaleMode === 'original' ? 1 : scaleMode === 'fit'
             ? Math.min(cw / iw, ch / ih)
@@ -115,19 +167,134 @@ function drawImageToCanvas(img, opts) {
     return work
 }
 
-function imageDataToBitmap(imageData, width, height, thresholdVal, invert) {
+function toGrayscale(imageData, width, height, brightnessAdj, contrastAdj) {
+    const gray = new Float32Array(width * height)
+    const contrastFactor = (259 * (contrastAdj + 255)) / (255 * (259 - contrastAdj))
+    for (let i = 0; i < width * height; i++) {
+        const j = i * 4
+        const a = imageData.data[j + 3]
+        let v = a < 128 ? 0 : 0.299 * imageData.data[j] + 0.587 * imageData.data[j + 1] + 0.114 * imageData.data[j + 2]
+        v = contrastFactor * (v - 128) + 128 + brightnessAdj
+        gray[i] = Math.max(0, Math.min(255, v))
+    }
+    return gray
+}
+
+function applySobel(gray, width, height) {
+    const out = new Float32Array(width * height)
+    function px(x, y) {
+        const cx = Math.max(0, Math.min(width - 1, x))
+        const cy = Math.max(0, Math.min(height - 1, y))
+        return gray[cy * width + cx]
+    }
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const gx = -px(x-1,y-1) + px(x+1,y-1) - 2*px(x-1,y) + 2*px(x+1,y) - px(x-1,y+1) + px(x+1,y+1)
+            const gy = -px(x-1,y-1) - 2*px(x,y-1) - px(x+1,y-1) + px(x-1,y+1) + 2*px(x,y+1) + px(x+1,y+1)
+            out[y * width + x] = Math.min(255, Math.sqrt(gx * gx + gy * gy))
+        }
+    }
+    return out
+}
+
+function applySharpen(gray, width, height) {
+    const out = new Float32Array(width * height)
+    function px(x, y) {
+        const cx = Math.max(0, Math.min(width - 1, x))
+        const cy = Math.max(0, Math.min(height - 1, y))
+        return gray[cy * width + cx]
+    }
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const v = 5*px(x,y) - px(x-1,y) - px(x+1,y) - px(x,y-1) - px(x,y+1)
+            out[y * width + x] = Math.max(0, Math.min(255, v))
+        }
+    }
+    return out
+}
+
+function ditherFloydSteinberg(gray, width, height) {
+    const buf = new Float32Array(gray)
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = y * width + x
+            const old = buf[i]
+            const val = old >= 128 ? 255 : 0
+            buf[i] = val
+            const err = old - val
+            if (x + 1 < width)                          buf[i + 1]         += err * 7 / 16
+            if (y + 1 < height && x > 0)                buf[i + width - 1] += err * 3 / 16
+            if (y + 1 < height)                          buf[i + width]     += err * 5 / 16
+            if (y + 1 < height && x + 1 < width)        buf[i + width + 1] += err * 1 / 16
+        }
+    }
+    return buf
+}
+
+function ditherAtkinson(gray, width, height) {
+    const buf = new Float32Array(gray)
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = y * width + x
+            const old = buf[i]
+            const val = old >= 128 ? 255 : 0
+            buf[i] = val
+            const err = (old - val) / 8
+            if (x + 1 < width)                          buf[i + 1]           += err
+            if (x + 2 < width)                          buf[i + 2]           += err
+            if (y + 1 < height && x > 0)                buf[i + width - 1]   += err
+            if (y + 1 < height)                          buf[i + width]       += err
+            if (y + 1 < height && x + 1 < width)        buf[i + width + 1]   += err
+            if (y + 2 < height)                          buf[i + width * 2]   += err
+        }
+    }
+    return buf
+}
+
+const BAYER4 = [
+     0, 8, 2, 10,
+    12, 4, 14, 6,
+     3, 11, 1, 9,
+    15, 7, 13, 5,
+]
+
+function ditherOrdered(gray, width, height) {
+    const buf = new Float32Array(width * height)
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = y * width + x
+            const bayerVal = (BAYER4[(y & 3) * 4 + (x & 3)] / 16 - 0.5) * 255
+            buf[i] = gray[i] + bayerVal >= 128 ? 255 : 0
+        }
+    }
+    return buf
+}
+
+function imageDataToBitmap(imageData, width, height, opts) {
+    const { threshold: thresholdVal, invert, dithering: ditherMode, brightness: br, contrast: ct, filter: flt } = opts
     const bitmapLen = Math.floor((width * height + 7) / 8)
     const bitmap = new Uint8Array(bitmapLen)
     const bytesPerRow = Math.ceil(width / 8)
+
+    let gray = toGrayscale(imageData, width, height, br || 0, ct || 0)
+
+    if (flt === 'edge') gray = applySobel(gray, width, height)
+    else if (flt === 'sharpen') gray = applySharpen(gray, width, height)
+
+    if (ditherMode === 'floyd-steinberg') {
+        gray = ditherFloydSteinberg(gray, width, height)
+    } else if (ditherMode === 'atkinson') {
+        gray = ditherAtkinson(gray, width, height)
+    } else if (ditherMode === 'ordered') {
+        gray = ditherOrdered(gray, width, height)
+    }
+
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-            const i = (y * width + x) * 4
-            const r = imageData.data[i]
-            const g = imageData.data[i + 1]
-            const b = imageData.data[i + 2]
-            const a = imageData.data[i + 3]
-            const gray = a < 128 ? 0 : 0.299 * r + 0.587 * g + 0.114 * b
-            let on = gray >= thresholdVal ? 1 : 0
+            const g = gray[y * width + x]
+            let on = ditherMode !== 'none'
+                ? (g >= 128 ? 1 : 0)
+                : (g >= thresholdVal ? 1 : 0)
             if (invert) on = 1 - on
             const byteIndex = y * bytesPerRow + (x >> 3)
             const bit = 7 - (x & 7)
@@ -170,21 +337,111 @@ function bitmapToDisplayCanvas(bitmap, width, height) {
     return canvas
 }
 
-function generate() {
-    if (!currentImage) return null
+const btnAddFrames = document.getElementById('btn-add-frames')
+const btnClearFrames = document.getElementById('btn-clear-frames')
+const btnDownloadAllBin = document.getElementById('btn-download-all-bin')
+const btnDownloadAllFb = document.getElementById('btn-download-all-fb')
+const frameCount = document.getElementById('frame-count')
+const addFramesInput = document.createElement('input')
+addFramesInput.type = 'file'
+addFramesInput.accept = 'image/*'
+addFramesInput.multiple = true
+addFramesInput.hidden = true
+document.body.appendChild(addFramesInput)
+
+function generateForImage(img) {
     const opts = getSettings()
-    let canvas = drawImageToCanvas(currentImage, opts)
+    const canvas = drawImageToCanvas(img, opts)
     const w = canvas.width
     const h = canvas.height
     const ctx = canvas.getContext('2d')
     const id = ctx.getImageData(0, 0, w, h)
-    const bitmap = imageDataToBitmap(id, w, h, opts.threshold, opts.invert)
+    const bitmap = imageDataToBitmap(id, w, h, opts)
     const bin = buildOledBin(w, h, bitmap)
-    const previewCanvas = bitmapToDisplayCanvas(bitmap, w, h)
-    return { bin, width: w, height: h, canvas: previewCanvas }
+    const display = bitmapToDisplayCanvas(bitmap, w, h)
+    return { bin, bitmap, width: w, height: h, canvas: display }
+}
+
+function generate() {
+    if (frames.length === 0) return null
+    return generateForImage(frames[selectedFrameIdx].img)
+}
+
+function rowMajorToSsd1306(bitmap, width, height) {
+    const pages = Math.ceil(height / 8)
+    const fb = new Uint8Array(pages * width)
+    const bytesPerRow = Math.ceil(width / 8)
+    for (let y = 0; y < height; y++) {
+        const dstY = (height - 1) - y
+        const dstPage = dstY >> 3
+        const dstBit = dstY & 7
+        for (let x = 0; x < width; x++) {
+            const dstX = (width - 1) - x
+            const byteIdx = y * bytesPerRow + (x >> 3)
+            const bit = 7 - (x & 7)
+            if ((bitmap[byteIdx] >> bit) & 1) {
+                fb[dstPage * width + dstX] |= 1 << dstBit
+            }
+        }
+    }
+    return fb
+}
+
+function updateFrameStrip() {
+    const isMulti = frames.length > 1
+    framesSection.hidden = !isMulti
+    btnDownloadAllBin.hidden = !isMulti
+    btnDownloadAllFb.hidden = !isMulti
+    frameCount.textContent = isMulti ? `(${frames.length})` : ''
+
+    frameStrip.innerHTML = ''
+    const opts = getSettings()
+    frames.forEach((frame, i) => {
+        const thumb = document.createElement('div')
+        thumb.className = 'i2o-frame-thumb' + (i === selectedFrameIdx ? ' selected' : '')
+
+        const result = generateForImage(frame.img)
+        const c = document.createElement('canvas')
+        const scale = 2
+        c.width = result.width * scale
+        c.height = result.height * scale
+        c.style.width = (result.width * scale) + 'px'
+        c.style.height = (result.height * scale) + 'px'
+        const tctx = c.getContext('2d')
+        tctx.imageSmoothingEnabled = false
+        tctx.drawImage(result.canvas, 0, 0, c.width, c.height)
+        thumb.appendChild(c)
+
+        const label = document.createElement('div')
+        label.className = 'i2o-frame-label'
+        label.textContent = `${i + 1}. ${frame.name}`
+        thumb.appendChild(label)
+
+        const removeBtn = document.createElement('button')
+        removeBtn.className = 'i2o-frame-remove'
+        removeBtn.textContent = '×'
+        removeBtn.title = 'Remove frame'
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation()
+            frames.splice(i, 1)
+            if (selectedFrameIdx >= frames.length) selectedFrameIdx = Math.max(0, frames.length - 1)
+            updateFrameStrip()
+            updatePreview()
+        })
+        thumb.appendChild(removeBtn)
+
+        thumb.addEventListener('click', () => {
+            selectedFrameIdx = i
+            updateFrameStrip()
+            updatePreview()
+        })
+
+        frameStrip.appendChild(thumb)
+    })
 }
 
 function updatePreview() {
+    stopAnimation()
     const result = generate()
     if (!result) {
         previewPlaceholder.hidden = false
@@ -199,36 +456,58 @@ function updatePreview() {
     previewCanvas.hidden = false
     previewCanvas.width = width
     previewCanvas.height = height
-  previewCanvas.style.width = (width * 4) + 'px'
-  previewCanvas.style.height = (height * 4) + 'px'
+    previewCanvas.style.width = (width * 4) + 'px'
+    previewCanvas.style.height = (height * 4) + 'px'
     const pctx = previewCanvas.getContext('2d')
     pctx.imageSmoothingEnabled = false
     pctx.drawImage(canvas, 0, 0)
     btnDownload.disabled = false
     btnOpenIde.disabled = false
-    outputInfo.textContent = `${width}×${height} pixels, ${bin.length} bytes (4-byte header + bitmap).`
+    if (frames.length > 1) {
+        outputInfo.textContent = `${width}×${height} px, frame ${selectedFrameIdx + 1}/${frames.length}, ${bin.length} bytes each.`
+    } else {
+        outputInfo.textContent = `${width}×${height} pixels, ${bin.length} bytes (4-byte header + bitmap).`
+    }
     return result
 }
 
-function onImageLoaded(file, img) {
-    currentFile = file
-    currentImage = img
+function loadImageFile(file) {
+    return new Promise((resolve, reject) => {
+        if (!file || !file.type.startsWith('image/')) { reject(new Error('Not an image')); return }
+        const img = new Image()
+        const url = URL.createObjectURL(file)
+        img.onload = () => { URL.revokeObjectURL(url); resolve({ name: file.name, img }) }
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load')) }
+        img.src = url
+    })
+}
+
+function sortFilesByName(files) {
+    return Array.from(files).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+}
+
+async function handleFiles(fileList, replace = true) {
+    const sorted = sortFilesByName(fileList)
+    const loaded = (await Promise.allSettled(sorted.map(f => loadImageFile(f))))
+        .filter(r => r.status === 'fulfilled')
+        .map(r => r.value)
+    if (loaded.length === 0) return
+    if (replace) {
+        frames = loaded
+        selectedFrameIdx = 0
+    } else {
+        frames.push(...loaded)
+    }
+    updateFrameStrip()
     updatePreview()
 }
 
-function handleFile(file) {
-    if (!file || !file.type.startsWith('image/')) return
-    const img = new Image()
-    const url = URL.createObjectURL(file)
-    img.onload = () => {
-        URL.revokeObjectURL(url)
-        onImageLoaded(file, img)
+function stopAnimation() {
+    if (animIntervalId) {
+        clearInterval(animIntervalId)
+        animIntervalId = null
+        btnPlayFrames.textContent = 'Play'
     }
-    img.onerror = () => {
-        URL.revokeObjectURL(url)
-        console.error('Failed to load image')
-    }
-    img.src = url
 }
 
 dropzone.addEventListener('click', (e) => {
@@ -248,36 +527,95 @@ dropzone.addEventListener('dragleave', () => {
 dropzone.addEventListener('drop', (e) => {
     e.preventDefault()
     dropzone.classList.remove('dragover')
-    const file = e.dataTransfer.files?.[0]
-    if (file) handleFile(file)
+    if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files)
 })
 
 fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0]
-    if (file) handleFile(file)
+    if (fileInput.files?.length) handleFiles(fileInput.files)
     fileInput.value = ''
+})
+
+btnAddFrames.addEventListener('click', () => addFramesInput.click())
+addFramesInput.addEventListener('change', () => {
+    if (addFramesInput.files?.length) handleFiles(addFramesInput.files, false)
+    addFramesInput.value = ''
+})
+
+btnClearFrames.addEventListener('click', () => {
+    frames = []
+    selectedFrameIdx = 0
+    stopAnimation()
+    updateFrameStrip()
+    updatePreview()
+})
+
+btnPlayFrames.addEventListener('click', () => {
+    if (frames.length < 2) return
+    if (animIntervalId) {
+        stopAnimation()
+        return
+    }
+    btnPlayFrames.textContent = 'Pause'
+    let idx = selectedFrameIdx
+    animIntervalId = setInterval(() => {
+        idx = (idx + 1) % frames.length
+        selectedFrameIdx = idx
+        const result = generateForImage(frames[idx].img)
+        previewCanvas.width = result.width
+        previewCanvas.height = result.height
+        const pctx = previewCanvas.getContext('2d')
+        pctx.imageSmoothingEnabled = false
+        pctx.drawImage(result.canvas, 0, 0)
+        frameCounter.textContent = `${idx + 1} / ${frames.length}`
+        frameStrip.querySelectorAll('.i2o-frame-thumb').forEach((el, i) => {
+            el.classList.toggle('selected', i === idx)
+        })
+    }, parseInt(frameDelay.value, 10) || 150)
 })
 
 threshold.addEventListener('input', () => {
     thresholdValue.textContent = threshold.value
-    updatePreview()
+    updateFrameStripAndPreview()
 })
 
-;[canvasWidth, canvasHeight, bgColor, invertCheck, scaling, centerH, centerV, rotate, flipH, flipV].forEach(el => {
-    el.addEventListener('change', updatePreview)
-    el.addEventListener('input', updatePreview)
+;[canvasWidth, canvasHeight, bgColor, invertCheck, filter, dithering, scaling, centerH, centerV, rotate, flipH, flipV].forEach(el => {
+    el.addEventListener('change', updateFrameStripAndPreview)
+    el.addEventListener('input', updateFrameStripAndPreview)
 })
 
-btnDownload.addEventListener('click', () => {
-    const result = generate()
-    if (!result) return
-    const blob = new Blob([result.bin], { type: 'application/octet-stream' })
-    const name = (currentFile?.name || 'bitmap').replace(/\.[^.]+$/, '') + '.bin'
+function downloadBlob(blob, name) {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = name
     a.click()
     URL.revokeObjectURL(a.href)
+}
+
+btnDownload.addEventListener('click', () => {
+    const result = generate()
+    if (!result) return
+    const blob = new Blob([result.bin], { type: 'application/octet-stream' })
+    const name = (frames[selectedFrameIdx]?.name || 'bitmap').replace(/\.[^.]+$/, '') + '.bin'
+    downloadBlob(blob, name)
+})
+
+btnDownloadAllBin.addEventListener('click', () => {
+    frames.forEach((frame, i) => {
+        const result = generateForImage(frame.img)
+        const blob = new Blob([result.bin], { type: 'application/octet-stream' })
+        const name = frame.name.replace(/\.[^.]+$/, '') + '.bin'
+        setTimeout(() => downloadBlob(blob, name), i * 100)
+    })
+})
+
+btnDownloadAllFb.addEventListener('click', () => {
+    frames.forEach((frame, i) => {
+        const result = generateForImage(frame.img)
+        const fb = rowMajorToSsd1306(result.bitmap, result.width, result.height)
+        const blob = new Blob([fb], { type: 'application/octet-stream' })
+        const name = frame.name.replace(/\.[^.]+$/, '') + '.fb'
+        setTimeout(() => downloadBlob(blob, name), i * 100)
+    })
 })
 
 const IMAGES_BIN_PATH = 'images/Untitled.bin'

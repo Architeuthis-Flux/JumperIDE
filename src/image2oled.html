@@ -21,8 +21,9 @@
         <section class="i2o-section">
             <h2>1. Select image</h2>
             <div class="i2o-dropzone" id="dropzone">
-                <input type="file" id="file-input" accept="image/*" hidden>
-                <p class="i2o-drop-text">Drop image here or <button type="button" class="i2o-btn-link" id="browse-btn">browse</button></p>
+                <input type="file" id="file-input" accept="image/*,.gif" multiple hidden>
+                <p class="i2o-drop-text">Drop images here or <button type="button" class="i2o-btn-link" id="browse-btn">browse</button></p>
+                <p class="i2o-drop-hint">Select multiple images to create an animation sequence</p>
             </div>
         </section>
 
@@ -48,6 +49,31 @@
                     <label><input type="checkbox" id="invert"> Invert image colors</label>
                 </div>
                 <div class="i2o-row">
+                    <label>Brightness <span id="brightness-value">0</span></label>
+                    <input type="range" id="brightness" min="-128" max="128" value="0">
+                </div>
+                <div class="i2o-row">
+                    <label>Contrast <span id="contrast-value">0</span></label>
+                    <input type="range" id="contrast" min="-128" max="128" value="0">
+                </div>
+                <div class="i2o-row">
+                    <label>Filter</label>
+                    <select id="filter">
+                        <option value="none">None</option>
+                        <option value="edge">Edge detection (Sobel)</option>
+                        <option value="sharpen">Sharpen</option>
+                    </select>
+                </div>
+                <div class="i2o-row">
+                    <label>Dithering</label>
+                    <select id="dithering">
+                        <option value="none">None (threshold)</option>
+                        <option value="floyd-steinberg">Floyd-Steinberg</option>
+                        <option value="atkinson">Atkinson</option>
+                        <option value="ordered">Ordered (Bayer 4×4)</option>
+                    </select>
+                </div>
+                <div class="i2o-row">
                     <label>Brightness / alpha threshold</label>
                     <input type="range" id="threshold" min="0" max="255" value="128">
                     <span id="threshold-value">128</span>
@@ -59,7 +85,12 @@
                         <option value="fit">Scale to fit (keep proportions)</option>
                         <option value="fill">Scale to fill (keep proportions, crop)</option>
                         <option value="original">Original size (center on canvas)</option>
+                        <option value="custom">Custom scale</option>
                     </select>
+                </div>
+                <div class="i2o-row i2o-custom-scale" id="custom-scale-row" hidden>
+                    <label>Scale <span id="custom-scale-value">100</span>%</label>
+                    <input type="range" id="custom-scale" min="1" max="400" value="100">
                 </div>
                 <div class="i2o-row">
                     <label>Center image</label>
@@ -96,6 +127,19 @@
             </div>
         </section>
 
+        <!-- Frames -->
+        <section class="i2o-section" id="frames-section" hidden>
+            <h2>Frames <span class="i2o-frame-count" id="frame-count"></span></h2>
+            <div class="i2o-frames-toolbar">
+                <button type="button" class="i2o-btn i2o-btn-sm" id="btn-play-frames" title="Play / Pause animation">Play</button>
+                <label>Delay <input type="number" id="frame-delay" min="10" max="2000" value="150"> ms</label>
+                <span id="frame-counter"></span>
+                <button type="button" class="i2o-btn i2o-btn-sm" id="btn-add-frames" title="Add more frames">+ Add</button>
+                <button type="button" class="i2o-btn i2o-btn-sm i2o-btn-danger" id="btn-clear-frames" title="Remove all frames">Clear</button>
+            </div>
+            <div class="i2o-frame-strip" id="frame-strip"></div>
+        </section>
+
         <!-- 4. Output -->
         <section class="i2o-section">
             <h2>4. Output</h2>
@@ -104,6 +148,8 @@
                 <div class="i2o-output-buttons">
                     <button type="button" class="i2o-btn i2o-btn-primary" id="btn-download" disabled>Download .bin</button>
                     <button type="button" class="i2o-btn" id="btn-open-ide" disabled>Open in JumperIDE</button>
+                    <button type="button" class="i2o-btn" id="btn-download-all-bin" hidden>Download all .bin</button>
+                    <button type="button" class="i2o-btn" id="btn-download-all-fb" hidden>Download all .fb</button>
                 </div>
             </div>
         </section>
