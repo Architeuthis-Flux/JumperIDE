@@ -235,6 +235,34 @@ export function bitmapToSsd1306Framebuffer(bitmap, width, height) {
 }
 
 /**
+ * Convert a .bin file (row-major MSB-first, with or without 4-byte header)
+ * to a .fb file (SSD1306 page-major framebuffer with U8G2_R2 180° flip).
+ * @param {Uint8Array} binBytes - full .bin file bytes
+ * @returns {Uint8Array|null} .fb bytes (512 or 1024), or null if unparseable
+ */
+export function binToFb(binBytes) {
+    const parsed = parseOledBin(binBytes)
+    if (!parsed) return null
+    const { width, height, dataOffset } = parsed
+    const bitmap = binBytes.subarray(dataOffset)
+    return rowMajorToSsd1306(bitmap, width, height)
+}
+
+/**
+ * Convert a .fb file (SSD1306 page-major framebuffer) to a .bin file
+ * (row-major MSB-first with 4-byte header). Reverses the U8G2_R2 180° flip.
+ * @param {Uint8Array} fbBytes - raw .fb bytes (512 or 1024)
+ * @returns {Uint8Array|null} .bin bytes (header + bitmap), or null if unparseable
+ */
+export function fbToBin(fbBytes) {
+    const parsed = parseFbFile(fbBytes)
+    if (!parsed) return null
+    const { width, height } = parsed
+    const bitmap = ssd1306ToRowMajor(fbBytes, width, height)
+    return buildOledBin(width, height, bitmap, true)
+}
+
+/**
  * Build full file bytes (header + bitmap) for saving.
  * @param {number} width
  * @param {number} height
@@ -800,6 +828,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
     targetElement.appendChild(container)
 
     return {
+        isFbFormat: isFb,
         getBytes() {
             if (isFb) return rowMajorToSsd1306(bitmapCopy, width, height)
             return buildOledBin(width, height, bitmapCopy, hasHeader)

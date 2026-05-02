@@ -39,7 +39,7 @@ import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
-import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence } from './oled_bin_viewer.js'
+import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, binToFb, fbToBin } from './oled_bin_viewer.js'
 import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
@@ -834,8 +834,18 @@ export async function saveCurrentFile() {
 
         // Collect all dirty frames from the animation sequence cache
         const framesToSave = []
+        const savingAsFb = editorFn.endsWith('.fb')
+        const savingAsBin = editorFn.endsWith('.bin')
         // Current frame (always save — uses live editor bytes)
-        framesToSave.push({ path: editorFn, bytes: viewer.getBytes() })
+        let currentBytes = viewer.getBytes()
+        if (savingAsFb && !viewer.isFbFormat) {
+            const converted = binToFb(currentBytes)
+            if (converted) currentBytes = converted
+        } else if (savingAsBin && viewer.isFbFormat) {
+            const converted = fbToBin(currentBytes)
+            if (converted) currentBytes = converted
+        }
+        framesToSave.push({ path: editorFn, bytes: currentBytes })
 
         // Other dirty frames in the same sequence
         for (const [, entries] of _fbFrameCache) {
