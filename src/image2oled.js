@@ -408,7 +408,6 @@ function updateFrameStrip() {
     frameCount.textContent = isMulti ? `(${frames.length})` : ''
 
     frameStrip.innerHTML = ''
-    const opts = getSettings()
     frames.forEach((frame, i) => {
         const thumb = document.createElement('div')
         thumb.className = 'i2o-frame-thumb' + (i === selectedFrameIdx ? ' selected' : '')

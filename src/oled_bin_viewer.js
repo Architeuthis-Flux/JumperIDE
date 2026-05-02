@@ -756,7 +756,7 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         const thumbStrip = document.createElement('div')
         thumbStrip.className = 'fb-anim-thumbstrip'
 
-        animThumbEls = animFrames.map((f, i) => {
+        animThumbEls = animFrames.map((f) => {
             const thumbWrap = document.createElement('div')
             thumbWrap.className = 'fb-anim-thumb'
             if (f.name === animCurrentName) thumbWrap.classList.add('active')
