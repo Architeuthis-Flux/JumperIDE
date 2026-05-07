@@ -3168,8 +3168,8 @@ async function _raw_readDeviceFirmwareVersion(raw, devInfo) {
 /** Compare two dotted version strings (e.g. "5.6.6.2"). */
 function compareVersions(a, b) {
     if (!a || !b) return 0
-    const pa = String(a).split(/[.\-]/).map(s => parseInt(s, 10) || 0)
-    const pb = String(b).split(/[.\-]/).map(s => parseInt(s, 10) || 0)
+    const pa = String(a).split(/[.-]/).map(s => parseInt(s, 10) || 0)
+    const pb = String(b).split(/[.-]/).map(s => parseInt(s, 10) || 0)
     const len = Math.max(pa.length, pb.length)
     for (let i = 0; i < len; i++) {
         const x = pa[i] || 0
@@ -3637,7 +3637,7 @@ async function flashBadgeFromLocalDevBuild() {
     let manifest
     try {
         manifest = await fetchJSON(REPLAY_BADGE_DEV_FIRMWARE_BASE + 'manifest.json')
-    } catch (err) {
+    } catch (_err) {
         throw new Error(`Local dev build not staged at ${REPLAY_BADGE_DEV_FIRMWARE_BASE}. ` +
             `Run \`npm run start\` from JumperIDE with the badge .pio/build/echo-dev directory present, ` +
             `or set REPLAY_BADGE_DEV_BUILD_DIR before building.`)
