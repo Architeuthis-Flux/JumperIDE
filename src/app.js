@@ -271,46 +271,73 @@ export async function connectDevice(type) {
     if (getSetting('interrupt-device')) {
         // TODO: detect WDT and disable it temporarily
 
-        const raw = await MpRawMode.begin(port)
-        try {
-            devInfo = await raw.getDeviceInfo()
-            Object.assign(devInfo, { connection: type })
+        // Some boards (notably the temporal badge) emit stray debug prints from
+        // background asyncio tasks/IRQs while we're probing. Sentinel filtering
+        // in rawmode.js handles most of it; this retry loop covers the rest so
+        // the user sees a smooth connect even when the first attempt is unlucky.
+        const MAX_PROBE_ATTEMPTS = 3
+        let raw = null
+        let lastErr = null
 
-            toastr.success(sanitizeHTML(devInfo.machine + '\n' + devInfo.version), 'Device connected')
-            analytics.track('Device Connected', devInfo)
-            console.log('Device info', devInfo)
-
-            if (window.pkg_install_url) {
-                await _raw_installPkg(raw, window.pkg_install_url)
-                window.pkg_install_url = null
-            }
-
-            let fs_stats = [null, null, null];
+        const probeDevice = async () => {
+            raw = await MpRawMode.begin(port)
             try {
-                fs_stats = await raw.getFsStats()
+                devInfo = await raw.getDeviceInfo()
+                Object.assign(devInfo, { connection: type })
+
+                toastr.success(sanitizeHTML(devInfo.machine + '\n' + devInfo.version), 'Device connected')
+                analytics.track('Device Connected', devInfo)
+                console.log('Device info', devInfo)
+
+                if (window.pkg_install_url) {
+                    await _raw_installPkg(raw, window.pkg_install_url)
+                    window.pkg_install_url = null
+                }
+
+                let fs_stats = [null, null, null];
+                try {
+                    fs_stats = await raw.getFsStats()
+                } catch (err) {
+                    console.log(err)
+                }
+
+                const fs_tree = await raw.walkFs()
+
+                _updateFileTree(fs_tree, fs_stats);
+
+                if        (fs_tree.filter(x => x.path === '/main.py').length) {
+                    await _raw_loadFile(raw, '/main.py')
+                } else if (fs_tree.filter(x => x.path === '/code.py').length) {
+                    await _raw_loadFile(raw, '/code.py')
+                }
+                document.dispatchEvent(new CustomEvent("deviceConnected", {detail: {port: port}}))
+            } finally {
+                try { await raw.end() } catch (_e) { /* best-effort */ }
+                raw = null
+            }
+        }
+
+        for (let attempt = 1; attempt <= MAX_PROBE_ATTEMPTS; attempt++) {
+            try {
+                await probeDevice()
+                lastErr = null
+                break
             } catch (err) {
-                console.log(err)
+                lastErr = err
+                console.warn(`Initial device probe attempt ${attempt}/${MAX_PROBE_ATTEMPTS} failed:`, err)
+                if (attempt < MAX_PROBE_ATTEMPTS) {
+                    // Brief settle delay; helps if a background task is mid-print.
+                    await sleep(250 * attempt)
+                }
             }
+        }
 
-            const fs_tree = await raw.walkFs()
-
-            _updateFileTree(fs_tree, fs_stats);
-
-            if        (fs_tree.filter(x => x.path === '/main.py').length) {
-                await _raw_loadFile(raw, '/main.py')
-            } else if (fs_tree.filter(x => x.path === '/code.py').length) {
-                await _raw_loadFile(raw, '/code.py')
-            }
-            document.dispatchEvent(new CustomEvent("deviceConnected", {detail: {port: port}}))
-
-        } catch (err) {
-            if (err.message.includes('Timeout')) {
+        if (lastErr) {
+            if (lastErr.message.includes('Timeout')) {
                 report('Device is not responding', new Error(`Ensure that:\n- You're using a recent version of MicroPython\n- The correct device is selected`))
             } else {
-                report('Error reading board info', err)
+                report('Error reading board info', lastErr)
             }
-        } finally {
-            await raw.end()
         }
         // Print banner. TODO: optimize
         await port.write('\x02')
@@ -324,42 +351,237 @@ export async function connectDevice(type) {
  * File Management
  */
 
+/**
+ * Run a function inside a fresh MpRawMode session, retrying transient failures
+ * (timeouts and similar transport hiccups, common on chatty boards like the
+ * temporal badge) up to `attempts` times. The MpRawMode is always released
+ * before retrying so a stuck transaction can't pin the next attempt.
+ *
+ * Reports a clear toastr error after final failure.
+ */
+async function _withRawRetry(errorTitle, fn, { attempts = 2, retryDelay = 250 } = {}) {
+    if (!port) return
+    let lastErr = null
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        let raw = null
+        try {
+            raw = await MpRawMode.begin(port)
+            const result = await fn(raw)
+            try { await raw.end() } catch (_e) { /* best-effort */ }
+            return result
+        } catch (err) {
+            lastErr = err
+            console.warn(`${errorTitle} attempt ${attempt}/${attempts} failed:`, err)
+            if (raw) { try { await raw.end() } catch (_e) { /* best-effort */ } }
+            if (attempt < attempts) {
+                await sleep(retryDelay * attempt)
+            }
+        }
+    }
+    if (lastErr) {
+        const msg = lastErr.message || String(lastErr)
+        if (msg.includes('Timeout')) {
+            report(errorTitle, new Error('Device is not responding. Try again, or reconnect if the board appears stuck.'))
+        } else {
+            report(errorTitle, lastErr)
+        }
+    }
+    throw lastErr
+}
+
 export async function refreshFileTree() {
     if (!port) return;
-    const raw = await MpRawMode.begin(port)
     try {
-        await _raw_updateFileTree(raw)
-    } finally {
-        await raw.end()
-    }
+        await _withRawRetry('Refreshing files', async (raw) => {
+            await _raw_updateFileTree(raw)
+        })
+    } catch (_err) { /* already reported */ }
 }
 
 export async function createNewFile(path) {
     if (!port) return;
     const fn = prompt(`Creating new file inside ${path}\nPlease enter the name:`)
     if (fn == null || fn == '') return
-    const raw = await MpRawMode.begin(port)
     try {
-        if (fn.endsWith('/')) {
-            const full = path + fn.slice(0, -1)
-            await raw.makePath(full)
-        } else {
-            const full = path + fn
-            if (fn.includes('/')) {
-                const [dirname, _] = splitPath(full)
-                await raw.makePath(dirname)
-            }
-            if (full.endsWith('.bin')) {
-                await raw.writeFile(full, defaultOledBinBytes(128, 32))
+        await _withRawRetry('Creating file', async (raw) => {
+            if (fn.endsWith('/')) {
+                const full = path + fn.slice(0, -1)
+                await raw.makePath(full)
             } else {
-                await raw.touchFile(full)
+                const full = path + fn
+                if (fn.includes('/')) {
+                    const [dirname, _] = splitPath(full)
+                    await raw.makePath(dirname)
+                }
+                if (full.endsWith('.bin')) {
+                    await raw.writeFile(full, defaultOledBinBytes(128, 32))
+                } else {
+                    await raw.touchFile(full)
+                }
+                await _raw_loadFile(raw, full)
             }
-            await _raw_loadFile(raw, full)
-        }
-        await _raw_updateFileTree(raw)
-    } finally {
-        await raw.end()
+            await _raw_updateFileTree(raw)
+        })
+    } catch (_err) { /* already reported */ }
+}
+
+/**
+ * Show a native file picker, then upload the chosen files to the device under
+ * `path` (default '/'). Used by the upload buttons in the file tree.
+ * Drag-and-drop on the file panel calls _uploadFileList directly.
+ */
+export async function uploadFiles(path = '/') {
+    if (!port) {
+        toastr.info('Connect your board first')
+        return
     }
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.multiple = true
+    input.style.display = 'none'
+    document.body.appendChild(input)
+    let fired = false
+    const cleanup = () => { if (!fired) input.remove() }
+    input.addEventListener('change', async () => {
+        fired = true
+        try { await _uploadFileList(path, [...input.files]) }
+        finally { input.remove() }
+    })
+    input.addEventListener('cancel', cleanup, { once: true })
+    // Safety: drop the hidden element after a focus change if 'cancel' didn't fire.
+    window.addEventListener('focus', () => setTimeout(cleanup, 1000), { once: true })
+    input.click()
+}
+
+/**
+ * Upload an explicit list of File / Blob-like objects to `destDir` on the device.
+ * Used by both the file picker and the drag-and-drop handler.
+ *
+ * Pre-reads all files into memory so we can show an accurate progress estimate
+ * and so a single retry inside _withRawRetry doesn't have to re-read from disk.
+ */
+async function _uploadFileList(destDir, files) {
+    if (!files || files.length === 0) return
+    if (!port) {
+        toastr.info('Connect your board first')
+        return
+    }
+    if (!destDir) destDir = '/'
+    if (!destDir.endsWith('/')) destDir += '/'
+
+    let fileBytes
+    try {
+        fileBytes = await Promise.all(files.map(async f => ({
+            name: f.name,
+            size: f.size,
+            bytes: new Uint8Array(await f.arrayBuffer()),
+        })))
+    } catch (err) {
+        report('Upload', new Error(`Could not read selected files: ${err.message}`))
+        return
+    }
+
+    // Skip empty/unsupported entries (e.g. directories, which arrayBuffer() rejects on)
+    fileBytes = fileBytes.filter(f => f.bytes && f.bytes.length >= 0)
+    if (fileBytes.length === 0) return
+
+    const totalBytes = fileBytes.reduce((acc, f) => acc + f.size, 0)
+    const totalLabel = sizeFmt(totalBytes)
+    const fileCount = fileBytes.length
+    const fileLabel = `${fileCount} file${fileCount > 1 ? 's' : ''}`
+
+    // Big files are slow over the REPL hexlify path — warn the user up front
+    // so they don't think the IDE has frozen.
+    const BIG_FILE_BYTES = 256 * 1024
+    if (totalBytes >= BIG_FILE_BYTES) {
+        const proceed = confirm(
+            `You're about to upload ${fileLabel} (${totalLabel}) to ${destDir}.\n\n` +
+            `Large uploads over a serial REPL can take a while (roughly 1 KB/sec on slow boards). ` +
+            `Continue?`
+        )
+        if (!proceed) return
+    }
+
+    const progressToast = toastr.info(
+        `Uploading ${fileLabel} (${totalLabel}) to ${destDir}…`,
+        'Upload',
+        { timeOut: 0, extendedTimeOut: 0, closeButton: false, tapToDismiss: false }
+    )
+
+    try {
+        await _withRawRetry('Uploading files', async (raw) => {
+            // Make sure the destination directory exists (idempotent)
+            const cleanDir = destDir.replace(/\/+$/, '')
+            if (cleanDir) {
+                try { await raw.makePath(cleanDir) } catch (_e) { /* may already exist */ }
+            }
+            for (let i = 0; i < fileBytes.length; i++) {
+                const f = fileBytes[i]
+                const dest = destDir + f.name
+                if (f.name.includes('/')) {
+                    const [dirname] = splitPath(dest)
+                    if (dirname) {
+                        try { await raw.makePath(dirname) } catch (_e) { /* may already exist */ }
+                    }
+                }
+                // Update toast text per-file so the user can see progress.
+                try {
+                    const toastNode = progressToast && (progressToast[0] || progressToast)
+                    const msgEl = toastNode && toastNode.querySelector
+                        ? toastNode.querySelector('.toast-message')
+                        : null
+                    if (msgEl) {
+                        msgEl.textContent = `Uploading ${i + 1}/${fileCount}: ${f.name} (${sizeFmt(f.size)})…`
+                    }
+                } catch (_e) { /* progress text is best-effort */ }
+                await raw.writeFile(dest, f.bytes)
+            }
+            await _raw_updateFileTree(raw)
+        })
+        if (progressToast) toastr.clear(progressToast)
+        toastr.success(`Uploaded ${fileLabel} (${totalLabel}) to ${destDir}`, 'Upload')
+        analytics.track('Files Uploaded', { count: fileCount, bytes: totalBytes })
+    } catch (_err) {
+        if (progressToast) toastr.clear(progressToast)
+        // _withRawRetry already reported the error
+    }
+}
+
+/**
+ * Wire up drag-and-drop file uploads on a container element. Files dropped
+ * anywhere on the file panel are uploaded to the root (`/`).
+ */
+function _wireFileTreeDragDrop(container) {
+    if (!container || container._dragWired) return
+    container._dragWired = true
+
+    let dragDepth = 0
+    const setActive = (active) => {
+        container.classList.toggle('drag-active', active)
+    }
+
+    container.addEventListener('dragenter', (e) => {
+        if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return
+        e.preventDefault()
+        dragDepth++
+        setActive(true)
+    })
+    container.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+    })
+    container.addEventListener('dragleave', () => {
+        dragDepth = Math.max(0, dragDepth - 1)
+        if (dragDepth === 0) setActive(false)
+    })
+    container.addEventListener('drop', async (e) => {
+        if (!e.dataTransfer || !e.dataTransfer.files || e.dataTransfer.files.length === 0) return
+        e.preventDefault()
+        dragDepth = 0
+        setActive(false)
+        await _uploadFileList('/', [...e.dataTransfer.files])
+    })
 }
 
 /** Create a new OLED bitmap tab: 128 wide × 32 tall, all black pixels, with header. No device connection required. */
@@ -440,27 +662,25 @@ export function createNewJumperlessTerminalTab() {
 export async function removeFile(path) {
     if (!port) return;
     if (!confirm(`Remove ${path}?`)) return
-    const raw = await MpRawMode.begin(port)
     try {
-        await raw.removeFile(path)
-        await _raw_updateFileTree(raw)
+        await _withRawRetry('Removing file', async (raw) => {
+            await raw.removeFile(path)
+            await _raw_updateFileTree(raw)
+        })
         document.dispatchEvent(new CustomEvent("fileRemoved", {detail: {path: path}}))
-    } finally {
-        await raw.end()
-    }
+    } catch (_err) { /* already reported */ }
 }
 
 export async function removeDir(path) {
     if (!port) return;
     if (!confirm(`Remove ${path}?`)) return
-    const raw = await MpRawMode.begin(port)
     try {
-        await raw.removeDir(path)
-        await _raw_updateFileTree(raw)
+        await _withRawRetry('Removing folder', async (raw) => {
+            await raw.removeDir(path)
+            await _raw_updateFileTree(raw)
+        })
         document.dispatchEvent(new CustomEvent("dirRemoved", {detail: {path: path}}))
-    } finally {
-        await raw.end()
-    }
+    } catch (_err) { /* already reported */ }
 }
 
 async function execReplNoFollow(cmd) {
@@ -516,8 +736,9 @@ function _updateFileTree(fs_tree, fs_stats)
     const fileTree = QID('menu-file-tree')
     fileTree.innerHTML = `<div>
         <span class="folder name"><i class="fa-solid fa-folder fa-fw"></i> /</span>
-        <a href="#" class="menu-action" title="Refresh" onclick="app.refreshFileTree();return false;"><i class="fa-solid fa-arrows-rotate fa-fw"></i></a>
-        <a href="#" class="menu-action" title="Create" onclick="app.createNewFile('/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
+        <a href="#" class="menu-action" title="Refresh the file list from the device" onclick="app.refreshFileTree();return false;"><i class="fa-solid fa-arrows-rotate fa-fw"></i></a>
+        <a href="#" class="menu-action" title="Create a new file or folder in /" onclick="app.createNewFile('/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
+        <a href="#" class="menu-action" title="Upload files from your computer to / (you can also drag files onto this panel)" onclick="app.uploadFiles('/');return false;"><i class="fa-solid fa-upload fa-fw"></i></a>
         <span class="menu-action">${T('files.used')} ${sizeFmt(fs_used,0)} / ${sizeFmt(fs_size,0)}</span>
     </div>`
     const AUTO_COLLAPSE_FOLDERS = ['zigmoji']
@@ -530,8 +751,9 @@ function _updateFileTree(fs_tree, fs_stats)
                 const chevron = collapsed ? 'fa-chevron-right' : 'fa-chevron-down'
                 target.insertAdjacentHTML('beforeend', `<div>
                     ${offset}<span class="folder name tree-folder-toggle" data-path="${n.path}"><i class="fa-solid ${chevron} fa-fw tree-folder-chevron"></i> ${n.name}</span>
-                    <a href="#" class="menu-action" title="Remove" onclick="app.removeDir('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
-                    <a href="#" class="menu-action" title="Create" onclick="app.createNewFile('${n.path}/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
+                    <a href="#" class="menu-action" title="Delete this folder (must be empty)" onclick="app.removeDir('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
+                    <a href="#" class="menu-action" title="Create a new file or folder in ${n.path}" onclick="app.createNewFile('${n.path}/');return false;"><i class="fa-solid fa-plus fa-fw"></i></a>
+                    <a href="#" class="menu-action" title="Upload files from your computer to ${n.path}" onclick="app.uploadFiles('${n.path}/');return false;"><i class="fa-solid fa-upload fa-fw"></i></a>
                 </div>`)
                 const childrenWrap = document.createElement('div')
                 childrenWrap.className = 'tree-folder-children'
@@ -567,8 +789,8 @@ function _updateFileTree(fs_tree, fs_stats)
                 } else {
                     target.insertAdjacentHTML('beforeend', `<div>
                         ${offset}<a href="#" class="name ${sel}" data-fn="${n.path}" onclick="app.fileClick('${n.path}');return false;">${icon} ${n.name}&nbsp;</a>
-                        <a href="#" class="menu-action" title="Remove" onclick="app.removeFile('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
-                        <span class="menu-action">${sizeFmt(n.size)}</span>
+                        <a href="#" class="menu-action" title="Delete ${n.path}" onclick="app.removeFile('${n.path}');return false;"><i class="fa-solid fa-xmark fa-fw"></i></a>
+                        <span class="menu-action" title="${n.size} bytes">${sizeFmt(n.size)}</span>
                     </div>`)
                 }
             }
@@ -610,6 +832,8 @@ function _updateFileTree(fs_tree, fs_stats)
         </div>`)
     }
 
+    // Wire drag-and-drop file uploads onto the file panel (idempotent)
+    _wireFileTreeDragDrop(QID('menu-files'))
 }
 
 async function _raw_updateFileTree(raw) {
@@ -640,11 +864,12 @@ export function fileTreeSelect(fn) {
 export async function fileClick(fn) {
     if (!port) return;
 
-    const raw = await MpRawMode.begin(port)
     try {
-        await _raw_loadFile(raw, fn)
-    } finally {
-        await raw.end()
+        await _withRawRetry('Opening file', async (raw) => {
+            await _raw_loadFile(raw, fn)
+        })
+    } catch (_err) {
+        return
     }
 
     fileTreeSelect(fn)
@@ -857,18 +1082,20 @@ export async function saveCurrentFile() {
             }
         }
 
-        const raw = await MpRawMode.begin(port)
         try {
-            if (editorFn.includes('/')) {
-                const [dirname] = splitPath(editorFn)
-                await raw.makePath(dirname)
-            }
-            for (const frame of framesToSave) {
-                await raw.writeFile(frame.path, frame.bytes)
-            }
-            await _raw_updateFileTree(raw)
-        } finally {
-            await raw.end()
+            await _withRawRetry('Saving file', async (raw) => {
+                if (editorFn.includes('/')) {
+                    const [dirname] = splitPath(editorFn)
+                    await raw.makePath(dirname)
+                }
+                for (const frame of framesToSave) {
+                    await raw.writeFile(frame.path, frame.bytes)
+                }
+                await _raw_updateFileTree(raw)
+            })
+        } catch (_err) {
+            // already reported via toastr by _withRawRetry
+            return
         }
 
         // Clear dirty flags
@@ -918,14 +1145,15 @@ export async function saveCurrentFile() {
             toastr.warning(sanitizeHTML(backtrace.summary), backtrace.type)
         }
     }
-    const raw = await MpRawMode.begin(port)
     try {
-        await raw.writeFile(editorFn, content)
-        await _raw_updateFileTree(raw)
-    } finally {
-        await raw.end()
+        await _withRawRetry('Saving file', async (raw) => {
+            await raw.writeFile(editorFn, content)
+            await _raw_updateFileTree(raw)
+        })
+    } catch (_err) {
+        // already reported via toastr by _withRawRetry
+        return
     }
-    // Success
     analytics.track('File Saved')
     toastr.success('File Saved')
 
@@ -954,11 +1182,56 @@ export async function reboot(mode = 'hard') {
     }
 }
 
+/**
+ * Robustly interrupt a running program. Strategy:
+ *  1. Send Ctrl-C up to 3 times with backoff. The active raw exec()'s readUntil
+ *     should observe the resulting `\x04` and return, which lets the run loop's
+ *     finally{} clear isInRunMode naturally.
+ *  2. If still running and the user has enabled the optional fallback, send a
+ *     soft-reset sequence up to 2 times.
+ *  3. If we still can't get the device to respond, force-clear the UI back to
+ *     the stopped state so the user is never trapped with a useless button.
+ *     They can reconnect to fully recover the session if needed.
+ */
+async function stopRunningProgram() {
+    if (!port) {
+        isInRunMode = false
+        resetRunButton()
+        return
+    }
+
+    const writeIgnoringErrors = async (bytes) => {
+        try { await port.write(bytes) }
+        catch (err) { console.warn('Stop: write failed:', err) }
+    }
+
+    for (let i = 0; i < 3; i++) {
+        await writeIgnoringErrors('\x03')
+        await sleep(150 * (i + 1))
+        if (!isInRunMode) return
+    }
+
+    if (getSetting('auto-soft-reset-on-stop')) {
+        toastr.info('Program ignored Ctrl+C — sending soft reset…')
+        for (let i = 0; i < 2; i++) {
+            await writeIgnoringErrors('\r\x03\x03\x04')
+            await sleep(500 * (i + 1))
+            if (!isInRunMode) return
+        }
+    }
+
+    console.warn('Stop: program is unresponsive; forcing UI back to stopped state.')
+    toastr.warning('Program is unresponsive. UI cleared — reconnect if the device stays stuck.', 'Stop')
+    try { if (port) port.emit = false } catch (_e) { /* best-effort */ }
+    isInRunMode = false
+    resetRunButton()
+}
+
 export async function runCurrentFile() {
     if (!port) return;
 
     if (isInRunMode) {
-        await port.write('\x03')
+        await stopRunningProgram()
         return
     }
 
@@ -1574,26 +1847,23 @@ async function _raw_installPkg(raw, pkg, { version=null } = {}) {
 
 export async function installPkg(pkg, { version=null } = {}) {
     if (!port) {
-        toastr.info('Connect yout board first')
+        toastr.info('Connect your board first')
         return
     }
-    const raw = await MpRawMode.begin(port)
     try {
-        await _raw_installPkg(raw, pkg, { version })
-        await _raw_updateFileTree(raw)
-    } catch (err) {
-        report('Installing failed', err)
-    } finally {
-        await raw.end()
-    }
+        await _withRawRetry('Installing package', async (raw) => {
+            await _raw_installPkg(raw, pkg, { version })
+            await _raw_updateFileTree(raw)
+        })
+    } catch (_err) { /* already reported */ }
 }
 
 export async function installPkgFromUrl() {
     if (!port) {
-        toastr.info('Connect yout board first')
+        toastr.info('Connect your board first')
         return
     }
-    const url = prompt('Enter package name or URL:')
+    const url = prompt('Enter package name or URL:\n\nExamples:\n  github:user/repo\n  https://example.com/pkg.py')
     if (url) {
         await installPkg(url)
     }
@@ -2413,6 +2683,11 @@ export function applyTranslation() {
     setupTabs(QID('side-menu'))
     setupTabs(QID('terminal-container'))
     createPort1EditorTab()
+
+    // Drag-and-drop uploads on the file panel work even before the first
+    // connect; the drop handler shows a friendly "Connect your board first"
+    // toast when no device is attached.
+    _wireFileTreeDragDrop(QID('menu-files'))
 
     applySidebarWidths()
     setupSidebarResizers()

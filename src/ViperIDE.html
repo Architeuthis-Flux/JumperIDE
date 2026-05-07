@@ -24,19 +24,19 @@
 <body id="app">
     <div id="tool-panel">
         <div>
-            <button onclick="app.toggleSideMenu()"><i class="fa-solid fa-bars"></i></button>
+            <button title="Show or hide the side menu (files, packages, scripts, tools, settings)" onclick="app.toggleSideMenu()"><i class="fa-solid fa-bars"></i></button>
             <img src="assets/jumperIDE@0.5x.png" alt="JumperIDE" class="logo-img"/>
-            <button title="Save File [Ctrl+S]"   onclick="app.saveCurrentFile()" id="btn-save"><i class="fa-solid fa-download"></i></button>
-            <button title="Run File [F5]"        onclick="app.runCurrentFile()"  id="btn-run"><img id="btn-run-icon" src="assets/iconPlay1024.png" alt="Run" class="btn-run-img"/></button>
+            <button title="Save the current file to your connected device [Ctrl+S]" onclick="app.saveCurrentFile()" id="btn-save"><i class="fa-solid fa-download"></i></button>
+            <button title="Run the current Python file on the device. Click again to stop. [F5]" onclick="app.runCurrentFile()"  id="btn-run"><img id="btn-run-icon" src="assets/iconPlay1024.png" alt="Run" class="btn-run-img"/></button>
         </div>
         <div>
             <span id="conn-advanced-buttons" style="display: none;">
-                <button title="Connect WebREPL"      onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
-                <button title="Connect Bluetooth"    onclick="app.connectDevice('ble')" id="btn-conn-ble"><i class="fa-brands fa-bluetooth-b"></i></button>
+                <button title="Connect to a MicroPython device over WebREPL (WebSocket). Advanced; usually USB is what you want." onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
+                <button title="Connect to a MicroPython device over Bluetooth LE. Advanced; usually USB is what you want." onclick="app.connectDevice('ble')" id="btn-conn-ble"><i class="fa-brands fa-bluetooth-b"></i></button>
             </span>
-            <button title="Connect USB/Serial"   onclick="app.connectDevice('usb')" id="btn-conn-usb"><i class="fa-brands fa-usb"></i></button>
-            <button title="API Reference" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
-            <button title="Full Screen" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
+            <button title="Connect a Jumperless or other MicroPython device over USB. Click again to disconnect." onclick="app.connectDevice('usb')" id="btn-conn-usb"><i class="fa-brands fa-usb"></i></button>
+            <button title="Show/hide the API Reference panel — searchable docs for MicroPython and the Jumperless API" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
+            <button title="Toggle full-screen mode for the whole IDE" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
         </div>
     </div>
     <div id="container">
@@ -44,14 +44,14 @@
         <div id="side-menu">
             <div class="tabs" id="menu-tabs">
                 <div>
-                    <a class="tab active" data-target="menu-files"><i class="fa-solid fa-folder fa-fw"></i></a>
-                    <a class="tab" data-target="menu-pkg" onclick="app.loadAllPkgIndexes();return false;"><i class="fa-solid fa-cubes fa-fw"></i></a>
-                    <a class="tab" data-target="menu-tools"><i class="fa-solid fa-tools fa-fw"></i></a>
-                    <a class="tab" data-target="menu-scripts" onclick="app.loadScriptIndex();return false;"><img src="assets/iconMain1024.png" alt="Scripts" class="tab-script-registry-icon"/></a>
+                    <a class="tab active" data-target="menu-files" title="File Manager — browse, create, and delete files on the connected device"><i class="fa-solid fa-folder fa-fw"></i></a>
+                    <a class="tab" data-target="menu-pkg" onclick="app.loadAllPkgIndexes();return false;" title="Package Manager — install MicroPython libraries from mip / PyPI"><i class="fa-solid fa-cubes fa-fw"></i></a>
+                    <a class="tab" data-target="menu-tools" title="Tools — extra utilities (Jumperless serial, OLED bitmap editor, Python prettify/minify, …)"><i class="fa-solid fa-tools fa-fw"></i></a>
+                    <a class="tab" data-target="menu-scripts" onclick="app.loadScriptIndex();return false;" title="JumperNet Script Registry — community-shared Jumperless scripts"><img src="assets/iconMain1024.png" alt="Scripts" class="tab-script-registry-icon"/></a>
                 </div>
                 <div>
-                    <a class="tab" data-target="menu-settings"><i class="fa-solid fa-sliders fa-fw"></i></a>
-                    <a class="tab" data-target="menu-about"><i class="fa-solid fa-circle-info fa-fw"></i></a>
+                    <a class="tab" data-target="menu-settings" title="Settings — connection, editor, packages, language, zoom, docs"><i class="fa-solid fa-sliders fa-fw"></i></a>
+                    <a class="tab" data-target="menu-about" title="About JumperIDE — version, links, GitHub"><i class="fa-solid fa-circle-info fa-fw"></i></a>
                     <!--button onclick="TODO"><i class="fa-regular fa-message fa-fw"></i></button>
                     <button onclick="TODO"><i class="fa-regular fa-star fa-fw"></i></button-->
                 </div>
@@ -62,8 +62,8 @@
                 <div id="menu-file-tree">
                     <div><span class="folder name"><i class="fa-solid fa-folder fa-fw"></i> /</span></div>
                     <div>
-                        <a href="#" class="name" onclick="app.connectDevice('usb');return false;">&emsp;🤔 <span id="no-files">no files</span></a>
-                        <a href="#" class="menu-action" onclick="app.connectDevice('usb');return false;"><i class="fa-solid fa-plug"></i></a>
+                        <a href="#" class="name" onclick="app.connectDevice('usb');return false;" title="Connect a device over USB to see its files">&emsp;🤔 <span id="no-files">no files</span></a>
+                        <a href="#" class="menu-action" onclick="app.connectDevice('usb');return false;" title="Connect over USB"><i class="fa-solid fa-plug"></i></a>
                     </div>
                 </div>
             </div>
@@ -75,7 +75,7 @@
             <div id="menu-scripts" class="tab-content">
                 <div class="menu-scripts-header">
                     <div id="menu-scripts-title">Jumperless Scripts</div>
-                    <button type="button" class="menu-scripts-refresh" id="menu-scripts-refresh" title="Refresh registry" aria-label="Refresh registry"><i class="fa-solid fa-arrows-rotate"></i></button>
+                    <button type="button" class="menu-scripts-refresh" id="menu-scripts-refresh" title="Re-fetch the latest scripts from the JumperNet registry" aria-label="Refresh registry"><i class="fa-solid fa-arrows-rotate"></i></button>
                 </div>
                 <div id="menu-scripts-list">
                 </div>
@@ -83,28 +83,28 @@
             <div id="menu-tools" class="tab-content">
                 <div id="menu-tools-title">Tools</div>
                 <div id="menu-tools-import-callout" class="menu-tools-callout">
-                    <a href="#" onclick="app.importPngToOledBitmap();return false;"><i class="fa-solid fa-file-import fa-fw"></i> Import PNG → OLED bitmap</a>
+                    <a href="#" onclick="app.importPngToOledBitmap();return false;" title="Convert any PNG image to a 128×32 1-bit OLED bitmap (.bin) you can save and display on the Jumperless OLED"><i class="fa-solid fa-file-import fa-fw"></i> Import PNG → OLED bitmap</a>
                 </div>
                 <div id="menu-tools-list">
                     <div class="title-lines" id="menu-tools-line-conn">device connection</div>
-                    <div><a href="#" onclick="app.openJumperlessPort1Terminal();return false;"><i class="fa-solid fa-terminal fa-fw"></i> Jumperless serial terminal (Port 1)</a></div>
-                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Relay.md" target="_blank">    <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL over internet 🌎</a></div>
-                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Server.md" target="_blank">   <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL in local network</a></div>
-                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Bluetooth-REPL.md" target="_blank">    <i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> Bluetooth REPL</a></div>
-                    <div><a href="bridge.html" target="_blank"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> P2P Bridge</a></div>
-                    <div><a href="benchmark.html" target="_blank"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> Device Benchmark</a></div>
+                    <div><a href="#" onclick="app.openJumperlessPort1Terminal();return false;" title="Open a separate terminal pinned to the Jumperless Port 1 serial passthrough — useful for talking to whatever's wired to the Jumperless"><i class="fa-solid fa-terminal fa-fw"></i> Jumperless serial terminal (Port 1)</a></div>
+                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Relay.md" target="_blank" title="Docs: connect to your board's WebREPL over the public internet via a relay"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL over internet 🌎</a></div>
+                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Web-REPL-Server.md" target="_blank" title="Docs: enable WebREPL on your board so you can connect over your local Wi-Fi network"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> WebREPL in local network</a></div>
+                    <div><a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Bluetooth-REPL.md" target="_blank" title="Docs: enable a Bluetooth LE REPL on your board"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> Bluetooth REPL</a></div>
+                    <div><a href="bridge.html" target="_blank" title="Open the P2P bridge utility (forward serial across browsers)"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> P2P Bridge</a></div>
+                    <div><a href="benchmark.html" target="_blank" title="Open the device benchmark utility — measures read/write/exec throughput on the connected board"><i class="fa-solid fa-arrow-up-right-from-square fa-fw"></i> Device Benchmark</a></div>
 
                     <div class="title-lines" id="menu-line-pkg-mgr">package manager</div>
-                    <div><a href="#" onclick="app.installPkgFromUrl()" id="install-via-url">📦 Install package via link</a></div>
+                    <div><a href="#" onclick="app.installPkgFromUrl()" id="install-via-url" title="Install a MicroPython package by URL or mip name (e.g. 'github:user/repo' or a direct .py URL)">📦 Install package via link</a></div>
 
                     <div class="title-lines" id="menu-tools-oled">OLED bitmap</div>
-                    <div><a href="#" onclick="app.createNewOledBitmap();return false;" id="new-oled-bitmap">🖼 New OLED bitmap (128×32, black)</a></div>
-                    <div><a href="#" onclick="app.openImage2OledInEditor();return false;">🖼 Image to OLED (image2cpp-style)</a></div>
-                    <div><a href="#" onclick="app.importPngToOledBitmap();return false;" id="import-png-oled">📷 Import PNG → OLED bitmap (128×32)</a></div>
+                    <div><a href="#" onclick="app.createNewOledBitmap();return false;" id="new-oled-bitmap" title="Open a new blank 128×32 OLED bitmap in the editor — paint, then Save to put it on the device">🖼 New OLED bitmap (128×32, black)</a></div>
+                    <div><a href="#" onclick="app.openImage2OledInEditor();return false;" title="Open the image2cpp-style converter — paste/drop an image, tweak threshold/dither, and export as an OLED bitmap">🖼 Image to OLED (image2cpp-style)</a></div>
+                    <div><a href="#" onclick="app.importPngToOledBitmap();return false;" id="import-png-oled" title="Pick a PNG and convert it to a 128×32 OLED bitmap in one step">📷 Import PNG → OLED bitmap (128×32)</a></div>
 
                     <div class="title-lines" id="menu-tools-python">Python</div>
-                    <div><a href="#" onclick="app.pyPrettify()" id="py-prettify">🎀 Prettify current file</a></div>
-                    <div><a href="#" onclick="app.pyMinify()" id="py-minify">🤏 Minify current file</a></div>
+                    <div><a href="#" onclick="app.pyPrettify()" id="py-prettify" title="Auto-format the current Python file using a built-in formatter">🎀 Prettify current file</a></div>
+                    <div><a href="#" onclick="app.pyMinify()" id="py-minify" title="Strip comments and whitespace to make the current Python file smaller (useful before deploying to a memory-constrained board)">🤏 Minify current file</a></div>
 
                     <!--div><a href="#" onclick="TODO()" id="download-all">📥 Download all files</a></div>
                     <div><a href="#" onclick="TODO()" id="publish">🚀 Publish on ViperIDE</a></div>
@@ -116,21 +116,22 @@
             <div id="menu-settings" class="tab-content">
                 <div id="menu-settings-title">Settings</div>
                 <div id="menu-settings-list">
-                    <div><input type="checkbox" id="advanced-mode"/><label for="advanced-mode">🔬 Advanced mode</label> (<a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Advanced-Mode.md" target="_blank">?</a>)</div>
+                    <div title="Show extra/advanced features (WebREPL, Bluetooth, package internals, etc.). Most users can leave this off."><input type="checkbox" id="advanced-mode"/><label for="advanced-mode" title="Show extra/advanced features (WebREPL, Bluetooth, package internals, etc.). Most users can leave this off.">🔬 Advanced mode</label> (<a href="https://github.com/vshymanskyy/ViperIDE/blob/main/docs/Advanced-Mode.md" target="_blank" title="Open Advanced Mode docs in a new tab">?</a>)</div>
                     <div class="title-lines" id="menu-line-conn">connection</div>
-                    <div><input type="checkbox" id="interrupt-device" checked/><label for="interrupt-device">Interrupt device</label></div>
-                    <div><input type="checkbox" id="force-serial-poly"/><label for="force-serial-poly">Force WebSerial polyfill</label></div>
+                    <div title="On connect, send Ctrl+C to stop any running program so JumperIDE can read board info and the file list. Disable only if your board has a custom REPL that you don't want interrupted."><input type="checkbox" id="interrupt-device" checked/><label for="interrupt-device" title="On connect, send Ctrl+C to stop any running program so JumperIDE can read board info and the file list. Disable only if your board has a custom REPL that you don't want interrupted.">Interrupt device</label></div>
+                    <div title="If the Stop button can't interrupt a running script (Ctrl+C ignored after a few tries), automatically send a soft reset as a fallback. Helpful when async tasks or hung loops swallow keyboard interrupts."><input type="checkbox" id="auto-soft-reset-on-stop" checked/><label for="auto-soft-reset-on-stop" title="If the Stop button can't interrupt a running script (Ctrl+C ignored after a few tries), automatically send a soft reset as a fallback. Helpful when async tasks or hung loops swallow keyboard interrupts.">Soft-reset on stuck stop</label></div>
+                    <div title="Force the WebSerial polyfill (uses WebUSB) instead of the browser's native WebSerial. Try this if your board enumerates but the connect button does nothing."><input type="checkbox" id="force-serial-poly"/><label for="force-serial-poly" title="Force the WebSerial polyfill (uses WebUSB) instead of the browser's native WebSerial. Try this if your board enumerates but the connect button does nothing.">Force WebSerial polyfill</label></div>
                     <div class="title-lines" id="menu-line-editor">editor</div>
-                    <div><input type="checkbox" id="expand-minify-json" checked/><label for="expand-minify-json">Auto expand/minify JSON</label></div>
-                    <div><input type="checkbox" id="use-word-wrap"/><label for="use-word-wrap">Word wrapping</label></div>
-                    <div><input type="checkbox" id="render-markdown" checked/><label for="render-markdown">Enable Markdown viewer</label></div>
+                    <div title="When opening a .json file, format it nicely; on save, minify it back to a single line."><input type="checkbox" id="expand-minify-json" checked/><label for="expand-minify-json" title="When opening a .json file, format it nicely; on save, minify it back to a single line.">Auto expand/minify JSON</label></div>
+                    <div title="Wrap long lines in the editor instead of scrolling sideways"><input type="checkbox" id="use-word-wrap"/><label for="use-word-wrap" title="Wrap long lines in the editor instead of scrolling sideways">Word wrapping</label></div>
+                    <div title="Render .md files as a formatted preview. Turn off if you'd rather edit Markdown as plain text."><input type="checkbox" id="render-markdown" checked/><label for="render-markdown" title="Render .md files as a formatted preview. Turn off if you'd rather edit Markdown as plain text.">Enable Markdown viewer</label></div>
                     <!--div><input type="checkbox" id="auto-soft-reset" checked/><label for="auto-soft-reset">Soft-reset on Run/Save File</label></div-->
                     <div class="title-lines" id="menu-line-pkg-mgr">package manager</div>
-                    <div><input type="checkbox" id="install-package-source"/><label for="install-package-source">Prefer installing sources (.py)</label></div>
+                    <div title="Install Python source files (.py) instead of pre-compiled bytecode (.mpy). Source is portable and easier to debug; bytecode is smaller and faster to import."><input type="checkbox" id="install-package-source"/><label for="install-package-source" title="Install Python source files (.py) instead of pre-compiled bytecode (.mpy). Source is portable and easier to debug; bytecode is smaller and faster to import.">Prefer installing sources (.py)</label></div>
                     <div class="title-lines" id="menu-line-other">other</div>
-                    <div class="space-between">
+                    <div class="space-between" title="Interface language for menus and tooltips">
                         <label for="lang">Language:</label>
-                        <select id="lang">
+                        <select id="lang" title="Interface language for menus and tooltips">
                             <!-- Indo-European Languages -->
                             <option value="en">🇺🇸 USA, 🇬🇧 British</option>
                             <option value="es">🇪🇸 Español</option>
@@ -163,9 +164,9 @@
                             <option value="id">🇮🇩 Bahasa Indonesia</option>
                         </select>
                     </div>
-                    <div class="space-between">
+                    <div class="space-between" title="UI zoom level — affects toolbars, menus, and editor font">
                         <label for="zoom">Zoom:</label>
-                        <select id="zoom">
+                        <select id="zoom" title="UI zoom level — affects toolbars, menus, and editor font">
                             <option value="0.80">80%</option>
                             <option value="1.00" selected>100%</option>
                             <option value="1.10">110%</option>
@@ -173,10 +174,10 @@
                             <option value="1.50">150%</option>
                         </select>
                     </div>
-                    <div><input type="checkbox" id="use-natural-sort" checked/><label for="use-natural-sort">Use natural sorting</label></div>
+                    <div title="Sort file names like a human would: file2 before file10. Turn off for strict alphabetical order."><input type="checkbox" id="use-natural-sort" checked/><label for="use-natural-sort" title="Sort file names like a human would: file2 before file10. Turn off for strict alphabetical order.">Use natural sorting</label></div>
                     <div class="title-lines" id="menu-line-docs">docs</div>
                     <div id="custom-doc-sites-container"></div>
-                    <button type="button" id="custom-doc-add" title="Add a documentation site">Add doc site</button>
+                    <button type="button" id="custom-doc-add" title="Add another documentation site URL to the API Reference picker">Add doc site</button>
                 </div>
             </div>
             <div id="menu-about" class="tab-content">
@@ -213,10 +214,10 @@
                         <!--a class="tab"        data-target="logs"><i class="fa-solid fa-bug"></i> IDE Logs</a-->
                     </div>
                     <div>
-                        <button title="Clear" onclick="app.clearTerminal()" id="term-clear"><i class="fa-solid fa-trash-can"></i></button>
-                        <button title="Soft Reset" onclick="app.reboot('soft')"><i class="fa-solid fa-arrows-rotate"></i></button>
-                        <button title="Hard Reset" onclick="app.reboot('hard')"><i class="fa-solid fa-power-off"></i></button>
-                        <button title="Full Screen" onclick="app.toggleFullScreen('terminal-container')" id="term-expand"><i class="fa-solid fa-expand"></i></button>
+                        <button title="Clear the terminal scrollback (does not affect the device)" onclick="app.clearTerminal()" id="term-clear"><i class="fa-solid fa-trash-can"></i></button>
+                        <button title="Soft reset (Ctrl+D): restart MicroPython without power-cycling. Use this first when a script is stuck." onclick="app.reboot('soft')"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        <button title="Hard reset: machine.reset() — full reboot like unplugging and replugging. Use if soft reset doesn't help." onclick="app.reboot('hard')"><i class="fa-solid fa-power-off"></i></button>
+                        <button title="Full-screen mode for the terminal" onclick="app.toggleFullScreen('terminal-container')" id="term-expand"><i class="fa-solid fa-expand"></i></button>
                     </div>
                 </div>
                 <div id="xterm" class="tab-content active">
@@ -230,10 +231,10 @@
         <div id="resizer-right" class="sidebar-resizer" title="Resize API reference panel"></div>
         <div id="api-ref-panel" class="collapsed">
             <div id="api-ref-header">
-                <label><input type="checkbox" id="api-ref-go-to-clicked"/> Go To Clicked Function</label>
-                <select id="api-ref-doc-picker" title="Switch documentation site"></select>
-                <a href="#" target="_blank" rel="noopener noreferrer" id="api-ref-docs-link" title="Open current docs in a new tab">Docs ➠</a>
-                <button title="Docs full width" onclick="app.toggleApiRefFullWidth()" id="btn-api-ref-fullwidth"><i class="fa-solid fa-expand"></i></button>
+                <label title="When checked, clicking a function name in your code jumps the docs panel to that function's reference"><input type="checkbox" id="api-ref-go-to-clicked"/> Go To Clicked Function</label>
+                <select id="api-ref-doc-picker" title="Switch which documentation site is shown (MicroPython, Jumperless API, Badge API, or your own)"></select>
+                <a href="#" target="_blank" rel="noopener noreferrer" id="api-ref-docs-link" title="Open current docs in a new browser tab">Docs ➠</a>
+                <button title="Expand the docs panel to full width" onclick="app.toggleApiRefFullWidth()" id="btn-api-ref-fullwidth"><i class="fa-solid fa-expand"></i></button>
             </div>
             <iframe id="api-ref-iframe" title="MicroPython API Reference" src="about:blank"></iframe>
         </div>

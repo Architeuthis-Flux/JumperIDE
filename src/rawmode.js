@@ -128,6 +128,26 @@ export class MpRawMode {
         return res
     }
 
+    /*
+     * Like exec(), but brackets the command's stdout with unique sentinel
+     * markers and returns only the bytes between them. This silently filters
+     * out stray debug prints emitted by background tasks/IRQs (e.g. on the
+     * temporal badge) which would otherwise corrupt structured responses.
+     */
+    async _execSentinel(body, timeout=5000) {
+        const tag = Math.random().toString(36).slice(2, 10)
+        const begin = `<<<JL_${tag}_BEGIN>>>`
+        const end   = `<<<JL_${tag}_END>>>`
+        const wrapped = `print('${begin}')\n${body}\nprint('${end}')\n`
+        const raw = await this.exec(wrapped, timeout)
+        const i = raw.indexOf(begin)
+        const j = raw.indexOf(end, i + begin.length)
+        if (i < 0 || j < 0) {
+            throw new Error('Sentinel markers not found in response')
+        }
+        return raw.slice(i + begin.length, j).replace(/^\r?\n/, '')
+    }
+
     async readFile(fn) {
         const rsp = await this.exec(`
 try:
@@ -214,7 +234,7 @@ os.rename('${dest}','${fn}')
     }
 
     async getDeviceInfo() {
-        const rsp = await this.exec(`
+        const rsp = await this._execSentinel(`
 try: u=os.uname()
 except: u=('','','','',sys.platform)
 try: v=sys.version.split(';')[1].strip()
@@ -284,7 +304,7 @@ except OSError as e:
     }
 
     async getFsStats(path='/') {
-        const rsp = await this.exec(`
+        const rsp = await this._execSentinel(`
 s = os.statvfs('${path}')
 fs = s[1] * s[2]
 ff = s[3] * s[0]
@@ -296,7 +316,7 @@ print('%s|%s|%s'%(fu,ff,fs))
     }
 
     async walkFs() {
-        const rsp = await this.exec(`
+        const rsp = await this._execSentinel(`
 def walk(p):
  for n in os.listdir(p if p else '/'):
   fn=p+'/'+n
@@ -311,14 +331,22 @@ def walk(p):
   except:
    print('f|'+p+'/???|'+str(s[6]))
 walk('')
-`)
+`, 15000)
 
         let result = []
-        // Build file tree
+        // Build file tree. Defensive parsing: silently skip any line that
+        // doesn't look like our `f|path|size` / `d|path|size` schema, so a
+        // stray debug print that lands inside the sentinel window can't crash
+        // the connect flow.
         for (const line of rsp.split('\n')) {
-            if (line === '') continue
+            const trimmed = line.trim()
+            if (trimmed === '') continue
+            const parts = trimmed.split('|')
+            if (parts.length !== 3) continue
+            const [type, fullpath, size] = parts
+            if ((type !== 'f' && type !== 'd') || !fullpath || !fullpath.startsWith('/')) continue
+
             let current = result
-            let [type, fullpath, size] = line.trim().split('|')
             let path = fullpath.split('/')
             let file
             if (type == 'f') {
@@ -336,14 +364,15 @@ walk('')
                 }
             }
             if (type == 'f') {
-                current.push({ name: file, path: fullpath, size: parseInt(size, 10) })
+                const parsedSize = parseInt(size, 10)
+                current.push({ name: file, path: fullpath, size: Number.isFinite(parsedSize) ? parsedSize : 0 })
             }
         }
         return result
     }
 
     async readSysInfoMD() {
-        return await this.exec(`
+        return await this._execSentinel(`
 import gc
 gc.collect()
 mu = gc.mem_alloc()
