@@ -227,11 +227,41 @@ export class WebSerial extends Transport {
     }
 
     async disconnect() {
-        if (this.reader) {
-            await this.reader.cancel()
-            await this.readableStreamClosed.catch(() => {})
+        await this.releaseStreams()
+        if (this.port) {
+            try { await this.port.forget() } catch (_) { /* best-effort */ }
+            this.port = null
         }
-        await this.port.forget()
+    }
+
+    /**
+     * Tear down our reader/writer/streams without calling port.forget(), so the
+     * underlying SerialPort handle can be re-used by another consumer (e.g.
+     * esptool-js for firmware flashing). Returns the SerialPort.
+     */
+    async releaseStreams() {
+        try {
+            if (this.writer) {
+                try { await this.writer.close() } catch (_) {}
+                try { this.writer.releaseLock() } catch (_) {}
+                this.writer = null
+            }
+            if (this.reader) {
+                try { await this.reader.cancel() } catch (_) {}
+                try { this.reader.releaseLock() } catch (_) {}
+                this.reader = null
+            }
+            if (this.readableStreamClosed) {
+                try { await this.readableStreamClosed } catch (_) {}
+                this.readableStreamClosed = null
+            }
+            if (this.port) {
+                try { await this.port.close() } catch (_) {}
+            }
+        } catch (err) {
+            console.warn('releaseStreams error', err)
+        }
+        return this.port
     }
 
     async writeBytes(data) {

@@ -35,6 +35,7 @@ import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROPYTHON } from './apiRefMicroPython.js'
 import { getBadgeAnchor } from './apiRefBadge.js'
 import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
+import { flashReplayBadge, rebootJumperlessToBootsel, readFirmwareSource } from './firmware_flash.js'
 import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
@@ -111,6 +112,8 @@ async function disconnectDevice() {
         port = null
     }
 
+    devInfo = null
+    hideFirmwareUpdateBanner()
     resetRunButton()
 
     for (const t of ['ws', 'ble', 'usb']) {
@@ -259,6 +262,8 @@ export async function connectDevice(type) {
         QID(`btn-conn-${type}`).classList.remove('connected')
         toastr.warning('Device disconnected')
         port = null
+        devInfo = null
+        hideFirmwareUpdateBanner()
         resetRunButton()
     })
 
@@ -305,6 +310,15 @@ export async function connectDevice(type) {
 
                 _updateFileTree(fs_tree, fs_stats);
 
+                // Read on-device firmware version while raw mode is open so we can
+                // compare against the latest GitHub release after the probe finishes.
+                try {
+                    devInfo.firmware_version = await _raw_readDeviceFirmwareVersion(raw, devInfo)
+                } catch (err) {
+                    console.warn('Could not read device firmware version', err)
+                    devInfo.firmware_version = null
+                }
+
                 if        (fs_tree.filter(x => x.path === '/main.py').length) {
                     await _raw_loadFile(raw, '/main.py')
                 } else if (fs_tree.filter(x => x.path === '/code.py').length) {
@@ -338,6 +352,9 @@ export async function connectDevice(type) {
             } else {
                 report('Error reading board info', lastErr)
             }
+        } else if (devInfo) {
+            // Don't block the connect flow on the network round-trip; fire and forget.
+            checkFirmwareUpdate(devInfo).catch((err) => console.warn('Firmware update check failed', err))
         }
         // Print banner. TODO: optimize
         await port.write('\x02')
@@ -741,13 +758,14 @@ function _updateFileTree(fs_tree, fs_stats)
         <a href="#" class="menu-action" title="Upload files from your computer to / (you can also drag files onto this panel)" onclick="app.uploadFiles('/');return false;"><i class="fa-solid fa-upload fa-fw"></i></a>
         <span class="menu-action">${T('files.used')} ${sizeFmt(fs_used,0)} / ${sizeFmt(fs_size,0)}</span>
     </div>`
-    const AUTO_COLLAPSE_FOLDERS = ['zigmoji']
+    const DO_NOT_AUTO_COLLAPSE_FOLDERS = ['docs', 'matrixapps', 'lib']
     function traverse(node, depth, container) {
         const target = container || fileTree
         const offset = '&emsp;'.repeat(depth)
         for (const n of sorted(node)) {
             if ('content' in n) {
-                const collapsed = AUTO_COLLAPSE_FOLDERS.includes(n.name.toLowerCase())
+                const hasChildFolders = n.content.some((child) => 'content' in child)
+                const collapsed = !hasChildFolders && !DO_NOT_AUTO_COLLAPSE_FOLDERS.includes(n.name.toLowerCase())
                 const chevron = collapsed ? 'fa-chevron-right' : 'fa-chevron-down'
                 target.insertAdjacentHTML('beforeend', `<div>
                     ${offset}<span class="folder name tree-folder-toggle" data-path="${n.path}"><i class="fa-solid ${chevron} fa-fw tree-folder-chevron"></i> ${n.name}</span>
@@ -3042,6 +3060,675 @@ async function checkForUpdates() {
 
 export function updateApp() {
     window.location.reload()
+}
+
+/*
+ * Device Firmware Update Check
+ *
+ * Detects the connected device kind (Jumperless RP2350 vs Replay/Temporal
+ * Badge ESP32), reads its on-device firmware version, compares with the
+ * latest GitHub release tag, and surfaces a banner offering to update.
+ *
+ * Actual flashing is hardware-specific (UF2 reboot for the RP2350B,
+ * esptool-style serial flashing for the ESP32) and is wired up later.
+ */
+
+const JUMPERLESS_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest'
+const REPLAY_BADGE_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases'
+// Until the Replay Badge release feed is published, bump this when you stage a
+// new dev build; if the badge reports an older version we'll show the banner
+// and let the user flash either a local firmware.bin or the staged dev build.
+const REPLAY_BADGE_LATEST_FALLBACK = '0.1.0'
+// Dev-only: rollup stages bootloader/partitions/boot_app0/firmware.bin under
+// build/dev-firmware/replay-badge/ if the PlatformIO build dir exists at
+// startup. See rollup.config.mjs.
+const REPLAY_BADGE_DEV_FIRMWARE_BASE = './dev-firmware/replay-badge/'
+
+/** Convert a GitHub `releases` or `releases/tag/X` page URL to its API URL. */
+function githubReleasesPageToApi(pageUrl) {
+    if (!pageUrl) return null
+    try {
+        const u = new URL(pageUrl)
+        if (u.hostname !== 'github.com') return null
+        // /<owner>/<repo>/releases[/latest|/tag/<tag>]
+        const parts = u.pathname.replace(/^\//, '').replace(/\/$/, '').split('/')
+        if (parts.length < 3 || parts[2] !== 'releases') return null
+        const owner = parts[0], repo = parts[1]
+        if (parts[3] === 'tag' && parts[4]) {
+            return `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(parts[4])}`
+        }
+        // /releases or /releases/latest both map to the latest release endpoint.
+        return `https://api.github.com/repos/${owner}/${repo}/releases/latest`
+    } catch (_) { return null }
+}
+
+function getJumperlessReleasesPage() {
+    return (getSetting('jumperless-firmware-url') || '').trim() || JUMPERLESS_DEFAULT_RELEASES_PAGE
+}
+function getReplayBadgeReleasesPage() {
+    return (getSetting('replay-badge-firmware-url') || '').trim() || REPLAY_BADGE_DEFAULT_RELEASES_PAGE
+}
+function isReplayBadgeUseLocalBuild() {
+    return !!getSetting('replay-badge-use-local-build')
+}
+
+const FIRMWARE_BANNER_DISMISS_KEY = 'firmware-update-banner-dismissed'
+
+let pendingFirmwareUpdate = null  // { kind, currentVersion, latestVersion, releaseUrl }
+
+function detectDeviceKind(devInfo) {
+    if (!devInfo) return 'unknown'
+    const sysname = (devInfo.sysname || '').toLowerCase()
+    const machine = (devInfo.machine || '').toLowerCase()
+    if (sysname.includes('jumperless') || machine.includes('jumperless')) {
+        return 'jumperless'
+    }
+    if (sysname.includes('badge') || machine.includes('badge') ||
+        machine.includes('temporal') || machine.includes('echo')) {
+        return 'replay-badge'
+    }
+    // ESP32 boards that aren't otherwise tagged: assume badge for now since this IDE
+    // is currently scoped to Jumperless + Temporal Badge. Adjust once more boards land.
+    if (sysname === 'esp32' || machine.includes('esp32')) {
+        return 'replay-badge'
+    }
+    return 'unknown'
+}
+
+/**
+ * Read the firmware version from the connected device while a raw-mode
+ * session is already open. For Jumperless this comes from /config.txt; for the
+ * badge we plan to embed it in the REPL banner header (placeholder for now).
+ */
+async function _raw_readDeviceFirmwareVersion(raw, devInfo) {
+    const kind = detectDeviceKind(devInfo)
+    if (kind === 'jumperless') {
+        // /config.txt lives on the LittleFS partition exposed by Jumperless's
+        // MicroPython port and contains a `firmware_version = X.Y.Z.W;` line.
+        try {
+            const buf = await raw.readFile('/config.txt')
+            const text = new TextDecoder().decode(buf)
+            const m = text.match(/firmware_version\s*=\s*([0-9][0-9A-Za-z.\-_+]*)\s*;?/i)
+            if (m) return m[1].trim()
+        } catch (_err) { /* fall through */ }
+        return null
+    }
+    if (kind === 'replay-badge') {
+        // Badge firmware embeds the version in MICROPY_BANNER_MACHINE so it
+        // appears as `Replay Badge v<X.Y.Z> with ESP32-S3` in os.uname().machine
+        // (see firmware/lib/micropython_embed/src/mpconfigport.h).
+        const machine = devInfo.machine || ''
+        const m = machine.match(/v(\d+(?:\.\d+){1,3})/i)
+        if (m) return m[1]
+        return null
+    }
+    return null
+}
+
+/** Compare two dotted version strings (e.g. "5.6.6.2"). */
+function compareVersions(a, b) {
+    if (!a || !b) return 0
+    const pa = String(a).split(/[.\-]/).map(s => parseInt(s, 10) || 0)
+    const pb = String(b).split(/[.\-]/).map(s => parseInt(s, 10) || 0)
+    const len = Math.max(pa.length, pb.length)
+    for (let i = 0; i < len; i++) {
+        const x = pa[i] || 0
+        const y = pb[i] || 0
+        if (x < y) return -1
+        if (x > y) return 1
+    }
+    return 0
+}
+
+function normalizeTag(tag) {
+    if (!tag) return null
+    return String(tag).trim().replace(/^v/i, '')
+}
+
+async function fetchLatestGithubReleaseFromPage(pageUrl, defaultPage) {
+    const apiUrl = githubReleasesPageToApi(pageUrl) || githubReleasesPageToApi(defaultPage)
+    if (!apiUrl) return null
+    try {
+        const data = await fetchJSON(apiUrl)
+        return {
+            version: normalizeTag(data.tag_name || data.name),
+            releaseUrl: data.html_url || pageUrl || defaultPage,
+            assets: Array.isArray(data.assets) ? data.assets : [],
+        }
+    } catch (err) {
+        console.warn('GitHub release fetch failed:', err)
+        return null
+    }
+}
+
+async function fetchLatestJumperlessRelease() {
+    return await fetchLatestGithubReleaseFromPage(getJumperlessReleasesPage(), JUMPERLESS_DEFAULT_RELEASES_PAGE)
+}
+
+async function fetchLatestReplayBadgeRelease() {
+    const page = getReplayBadgeReleasesPage()
+    // If the configured page actually has a release, use it.
+    const remote = await fetchLatestGithubReleaseFromPage(page, REPLAY_BADGE_DEFAULT_RELEASES_PAGE)
+    if (remote && remote.version) return remote
+    // No release published yet — fall back to the bundled dev build so the
+    // banner still shows up when the device is older.
+    return {
+        version: REPLAY_BADGE_LATEST_FALLBACK,
+        releaseUrl: page,
+        assets: [],
+        usingFallback: true,
+    }
+}
+
+async function checkFirmwareUpdate(info) {
+    pendingFirmwareUpdate = null
+    const kind = detectDeviceKind(info)
+    if (kind === 'unknown') return
+
+    const current = info.firmware_version
+    let latest = null
+    let label = ''
+    try {
+        if (kind === 'jumperless') {
+            label = 'Jumperless'
+            latest = await fetchLatestJumperlessRelease()
+        } else if (kind === 'replay-badge') {
+            label = 'Replay Badge'
+            latest = await fetchLatestReplayBadgeRelease()
+        }
+    } catch (err) {
+        console.warn(`Could not fetch latest ${label} release`, err)
+        return
+    }
+
+    if (!latest) return
+
+    // Without a current version we still want to nudge the user once we have a
+    // latest tag. For now we only show the banner when we *know* the device is
+    // behind, to avoid false positives.
+    if (!current || !latest.version) {
+        console.log(`[firmware] ${label}: current=${current || 'unknown'} latest=${latest.version || 'unknown'} (skipping banner)`)
+        return
+    }
+
+    const cmp = compareVersions(current, latest.version)
+    if (cmp >= 0) {
+        console.log(`[firmware] ${label}: up to date (${current})`)
+        return
+    }
+
+    pendingFirmwareUpdate = {
+        kind,
+        label,
+        currentVersion: current,
+        latestVersion: latest.version,
+        releaseUrl: latest.releaseUrl,
+        localPath: latest.localPath || null,
+    }
+    showFirmwareUpdateBanner(pendingFirmwareUpdate)
+}
+
+function bannerDismissedFor(update) {
+    try {
+        const raw = localStorage.getItem(FIRMWARE_BANNER_DISMISS_KEY)
+        if (!raw) return false
+        const data = JSON.parse(raw)
+        return data && data.kind === update.kind && data.latestVersion === update.latestVersion
+    } catch (_) { return false }
+}
+
+function showFirmwareUpdateBanner(update) {
+    const banner = QID('firmware-update-banner')
+    const text = QID('firmware-update-banner-text')
+    if (!banner || !text) return
+    if (bannerDismissedFor(update)) return
+    text.innerHTML = `Your <strong>${sanitizeHTML(update.label)}</strong> firmware is out of date ` +
+        `(installed <code>${sanitizeHTML(update.currentVersion)}</code>, latest ` +
+        `<code>${sanitizeHTML(update.latestVersion)}</code>) — click here to update.`
+    banner.classList.remove('hidden')
+}
+
+function hideFirmwareUpdateBanner() {
+    const banner = QID('firmware-update-banner')
+    if (banner) banner.classList.add('hidden')
+}
+
+export function dismissFirmwareUpdateBanner() {
+    if (pendingFirmwareUpdate) {
+        try {
+            localStorage.setItem(FIRMWARE_BANNER_DISMISS_KEY, JSON.stringify({
+                kind: pendingFirmwareUpdate.kind,
+                latestVersion: pendingFirmwareUpdate.latestVersion,
+            }))
+        } catch (_) {}
+    }
+    hideFirmwareUpdateBanner()
+}
+
+export function startFirmwareUpdate() {
+    const update = pendingFirmwareUpdate
+    if (!update) return
+    openFirmwareUpdateModal(update)
+}
+
+/**
+ * Open the firmware modal even when no version mismatch was detected — handy
+ * for re-flashing the same version, recovering a bricked board, or flashing a
+ * local dev build. Caller picks the device kind explicitly; if omitted we
+ * infer from the currently connected device (or default to the badge, since
+ * that's the only one we can flash entirely in-browser).
+ */
+export async function forceFirmwareUpdate(kind = null) {
+    let resolved = kind
+    if (!resolved) {
+        resolved = devInfo ? detectDeviceKind(devInfo) : 'replay-badge'
+        if (resolved === 'unknown') resolved = 'replay-badge'
+    }
+
+    // If we already have pending update info for this kind, reuse it so all
+    // the URL/asset metadata is preserved.
+    if (pendingFirmwareUpdate && pendingFirmwareUpdate.kind === resolved) {
+        openFirmwareUpdateModal({ ...pendingFirmwareUpdate, forced: true })
+        return
+    }
+
+    // Otherwise build a minimal update object. We try to fetch latest release
+    // info best-effort but don't block on it.
+    const label = resolved === 'jumperless' ? 'Jumperless' : 'Replay Badge'
+    const releaseUrl = resolved === 'jumperless' ? getJumperlessReleasesPage() : getReplayBadgeReleasesPage()
+    const update = {
+        kind: resolved,
+        label,
+        currentVersion: (devInfo && devInfo.firmware_version) || null,
+        latestVersion: null,
+        releaseUrl,
+        assets: [],
+        forced: true,
+    }
+    openFirmwareUpdateModal(update)
+
+    // Fire and forget — refine the modal once we have release data.
+    try {
+        const latest = resolved === 'jumperless'
+            ? await fetchLatestJumperlessRelease()
+            : await fetchLatestReplayBadgeRelease()
+        if (!latest) return
+        const refined = {
+            ...update,
+            latestVersion: latest.version || update.latestVersion,
+            releaseUrl: latest.releaseUrl || update.releaseUrl,
+            assets: latest.assets || [],
+            usingFallback: !!latest.usingFallback,
+        }
+        openFirmwareUpdateModal(refined)
+    } catch (_) { /* best-effort */ }
+}
+
+/* ── Firmware update modal ────────────────────────────────────────────── */
+
+function fwModalEls() {
+    return {
+        modal: QID('firmware-update-modal'),
+        summary: QID('firmware-update-modal-summary'),
+        instructions: QID('firmware-update-modal-instructions'),
+        actions: QID('firmware-update-modal-actions'),
+        log: QID('firmware-update-modal-log'),
+        progress: QID('firmware-update-modal-progress'),
+        progressBar: QID('firmware-update-modal-progress-bar'),
+        fileInput: QID('firmware-update-file-input'),
+    }
+}
+
+function fwLog(msg) {
+    const { log } = fwModalEls()
+    if (!log) return
+    log.classList.remove('hidden')
+    log.textContent += (log.textContent ? '\n' : '') + msg
+    log.scrollTop = log.scrollHeight
+}
+
+function fwProgress(written, total) {
+    const { progress, progressBar } = fwModalEls()
+    if (!progress || !progressBar) return
+    progress.classList.remove('hidden')
+    const pct = total > 0 ? Math.round((written / total) * 100) : 0
+    progressBar.style.width = pct + '%'
+}
+
+export function closeFirmwareUpdateModal() {
+    const { modal, log, progress, progressBar } = fwModalEls()
+    if (!modal) return
+    modal.classList.add('hidden')
+    if (log) { log.textContent = ''; log.classList.add('hidden') }
+    if (progress) progress.classList.add('hidden')
+    if (progressBar) progressBar.style.width = '0%'
+}
+
+function openFirmwareUpdateModal(update) {
+    const { modal, summary, instructions, actions } = fwModalEls()
+    if (!modal) return
+
+    const installed = update.currentVersion || 'unknown'
+    const latest = update.latestVersion || 'unknown'
+    const cmp = (update.currentVersion && update.latestVersion)
+        ? compareVersions(update.currentVersion, update.latestVersion)
+        : null
+
+    let headline
+    if (update.forced && cmp !== null && cmp >= 0) {
+        headline = `Re-flash <strong>${sanitizeHTML(update.label)}</strong> firmware (already at the latest version).`
+    } else if (update.forced) {
+        headline = `Flash <strong>${sanitizeHTML(update.label)}</strong> firmware.`
+    } else {
+        headline = `Your <strong>${sanitizeHTML(update.label)}</strong> firmware is out of date.`
+    }
+
+    summary.innerHTML = `
+        <p>${headline}</p>
+        <ul>
+            <li>Installed: <code>${sanitizeHTML(installed)}</code></li>
+            <li>Latest:    <code>${sanitizeHTML(latest)}</code></li>
+        </ul>
+    `
+
+    if (update.kind === 'jumperless') {
+        renderJumperlessModal(update, instructions, actions)
+    } else if (update.kind === 'replay-badge') {
+        renderBadgeModal(update, instructions, actions)
+    } else {
+        instructions.innerHTML = `<p>Unknown device kind. Open the release page to download manually.</p>`
+        actions.innerHTML = `<a class="fw-btn" href="${update.releaseUrl}" target="_blank" rel="noopener">Open release page</a>`
+    }
+
+    modal.classList.remove('hidden')
+}
+
+/* ── Jumperless (RP2350B) — UF2 drop ──────────────────────────────────── */
+
+function renderJumperlessModal(update, instructions, actions) {
+    // Prefer the asset URL straight from the GitHub API response if present,
+    // otherwise derive it from the release page URL or fall back to the canonical
+    // JumperlessV5 download path so a customised settings URL still works.
+    let uf2Url = null
+    const uf2Asset = (update.assets || []).find(a => /\.uf2$/i.test(a.name))
+    if (uf2Asset && uf2Asset.browser_download_url) {
+        uf2Url = uf2Asset.browser_download_url
+    } else if (update.releaseUrl && update.releaseUrl.includes('/tag/')) {
+        uf2Url = update.releaseUrl.replace('/tag/', '/download/') + '/firmware.uf2'
+    } else if (update.latestVersion) {
+        try {
+            const u = new URL(update.releaseUrl || JUMPERLESS_DEFAULT_RELEASES_PAGE)
+            const parts = u.pathname.replace(/^\//, '').split('/')
+            const owner = parts[0], repo = parts[1]
+            uf2Url = `https://github.com/${owner}/${repo}/releases/download/${update.latestVersion}/firmware.uf2`
+        } catch (_) {
+            uf2Url = `https://github.com/Architeuthis-Flux/JumperlessV5/releases/download/${update.latestVersion}/firmware.uf2`
+        }
+    }
+
+    instructions.innerHTML = `
+        <p>The Jumperless flashes by drag-and-drop — there's no in-browser write to its UF2 bootloader yet.
+        We'll do the rest of the dance for you:</p>
+        <ol>
+            <li>Click <strong>Reboot to bootloader</strong>. Your Jumperless will disconnect and reappear as a USB drive named <code>RP2350</code> (or <code>RPI-RP2</code>).</li>
+            <li>Click <strong>Download firmware.uf2</strong>.</li>
+            <li>Drag the downloaded <code>firmware.uf2</code> onto that drive. The board will flash and reboot automatically.</li>
+            <li>Reconnect via the USB button when it's back.</li>
+        </ol>
+    `
+
+    actions.innerHTML = ''
+    const btnReboot = document.createElement('button')
+    btnReboot.className = 'fw-btn'
+    btnReboot.textContent = 'Reboot to bootloader'
+    btnReboot.onclick = async () => {
+        btnReboot.disabled = true
+        try {
+            await rebootJumperlessIntoBootsel()
+        } catch (err) {
+            fwLog('Could not reboot: ' + (err.message || err))
+            btnReboot.disabled = false
+        }
+    }
+
+    const btnDownload = document.createElement('a')
+    btnDownload.className = 'fw-btn'
+    btnDownload.href = uf2Url || update.releaseUrl
+    btnDownload.target = '_blank'
+    btnDownload.rel = 'noopener'
+    btnDownload.textContent = uf2Url ? 'Download firmware.uf2' : 'Open release page'
+
+    const btnRelease = document.createElement('a')
+    btnRelease.className = 'fw-btn secondary'
+    btnRelease.href = update.releaseUrl
+    btnRelease.target = '_blank'
+    btnRelease.rel = 'noopener'
+    btnRelease.textContent = 'Release notes'
+
+    actions.append(btnReboot, btnDownload, btnRelease)
+}
+
+async function rebootJumperlessIntoBootsel() {
+    if (!port) throw new Error('No device connected.')
+    fwLog('Releasing REPL session…')
+
+    // We need the underlying SerialPort. Only WebSerial transports expose one.
+    if (typeof port.releaseStreams !== 'function') {
+        throw new Error('Bootloader reboot is only supported on Web Serial connections.')
+    }
+    const sp = await port.releaseStreams()
+    // Drop our handle to the REPL port so onDisconnect doesn't fire spuriously.
+    const oldPort = port
+    port = null
+    devInfo = null
+    hideFirmwareUpdateBanner()
+    for (const t of ['ws', 'ble', 'usb']) QID(`btn-conn-${t}`).classList.remove('connected')
+    resetRunButton()
+    try { oldPort.disconnectCallback = () => {} } catch (_) {}
+
+    fwLog('Tickling 1200-baud reset to enter BOOTSEL…')
+    await rebootJumperlessToBootsel(sp)
+    fwLog('Done. Look for an RP2350 / RPI-RP2 drive on your computer, then drop firmware.uf2 onto it.')
+}
+
+/* ── Replay Badge (ESP32-S3) — esptool-js ─────────────────────────────── */
+
+// Default ESP32-S3 image layout for our build (matches PlatformIO's
+// `pio run -t upload`). Filesystem partition (ffat) is intentionally absent
+// so user files survive a flash.
+const REPLAY_BADGE_DEFAULT_OFFSETS = {
+    'bootloader.bin': 0x0000,
+    'partitions.bin': 0x8000,
+    'boot_app0.bin':  0xe000,
+    'firmware.bin':   0x10000,
+}
+
+function renderBadgeModal(update, instructions, actions) {
+    const useLocalBuild = isReplayBadgeUseLocalBuild()
+    const releaseFeedLive = !update.usingFallback && Array.isArray(update.assets) && update.assets.some(a => /\.bin$/i.test(a.name))
+
+    let instructionsHtml = ''
+    if (useLocalBuild) {
+        instructionsHtml = `
+            <p>JumperIDE will flash the staged local dev build via <code>esptool-js</code>:</p>
+            <ul>
+                <li><code>0x0000</code> bootloader.bin</li>
+                <li><code>0x8000</code> partitions.bin</li>
+                <li><code>0xE000</code> boot_app0.bin (OTA selector)</li>
+                <li><code>0x10000</code> firmware.bin (app)</li>
+            </ul>
+            <p>The <code>ffat</code> filesystem partition is <strong>not</strong> erased — your saved files stay put.</p>
+            <p>Most ESP32-S3 boards reset into download mode automatically. If yours doesn't, hold <strong>BOOT</strong>, tap <strong>RST</strong>, release <strong>BOOT</strong>, then click <strong>Flash dev build</strong>.</p>
+        `
+    } else if (releaseFeedLive) {
+        instructionsHtml = `
+            <p>The badge flashes over USB serial. JumperIDE will fetch <code>firmware.bin</code> from the latest release and write it via <code>esptool-js</code>.</p>
+            <ol>
+                <li>If your board doesn't auto-enter download mode: hold <strong>BOOT</strong>, tap <strong>RST</strong>, release <strong>BOOT</strong>.</li>
+                <li>Click <strong>Flash badge</strong>, then pick the badge serial port.</li>
+            </ol>
+        `
+    } else {
+        instructionsHtml = `
+            <p>No public Replay Badge release found at <a href="${sanitizeHTML(update.releaseUrl)}" target="_blank" rel="noopener">${sanitizeHTML(update.releaseUrl)}</a> yet.</p>
+            <p>You can either:</p>
+            <ul>
+                <li>Enable <em>Replay Badge: flash local dev build</em> in Settings to use the staged PlatformIO build, or</li>
+                <li>Click <strong>Choose firmware.bin…</strong> to pick a single app image manually.</li>
+            </ul>
+        `
+    }
+    instructions.innerHTML = instructionsHtml
+
+    actions.innerHTML = ''
+
+    if (useLocalBuild) {
+        const btnLocal = document.createElement('button')
+        btnLocal.className = 'fw-btn'
+        btnLocal.textContent = 'Flash dev build'
+        btnLocal.onclick = async () => {
+            btnLocal.disabled = true
+            try { await flashBadgeFromLocalDevBuild() }
+            catch (err) { fwLog('ERROR: ' + (err.message || err)) }
+            finally { btnLocal.disabled = false }
+        }
+        actions.appendChild(btnLocal)
+    } else if (releaseFeedLive) {
+        const btnFlash = document.createElement('button')
+        btnFlash.className = 'fw-btn'
+        btnFlash.textContent = 'Flash badge'
+        btnFlash.onclick = async () => {
+            btnFlash.disabled = true
+            try { await flashBadgeFromReleaseAssets(update) }
+            catch (err) { fwLog('ERROR: ' + (err.message || err)) }
+            finally { btnFlash.disabled = false }
+        }
+        actions.appendChild(btnFlash)
+    }
+
+    const btnPickFile = document.createElement('button')
+    btnPickFile.className = 'fw-btn secondary'
+    btnPickFile.textContent = 'Choose firmware.bin…'
+    btnPickFile.onclick = async () => {
+        btnPickFile.disabled = true
+        try {
+            const f = await pickFile('.bin')
+            if (!f) { fwLog('Cancelled.'); return }
+            await flashBadgeWithImages([{ name: 'firmware.bin', address: 0x10000, data: new Uint8Array(await f.arrayBuffer()) }])
+        } catch (err) {
+            fwLog('ERROR: ' + (err.message || err))
+        } finally {
+            btnPickFile.disabled = false
+        }
+    }
+    actions.appendChild(btnPickFile)
+
+    const btnRelease = document.createElement('a')
+    btnRelease.className = 'fw-btn secondary'
+    btnRelease.href = update.releaseUrl
+    btnRelease.target = '_blank'
+    btnRelease.rel = 'noopener'
+    btnRelease.textContent = 'Release page'
+    actions.appendChild(btnRelease)
+}
+
+async function flashBadgeFromLocalDevBuild() {
+    fwLog('Loading staged dev build manifest…')
+    let manifest
+    try {
+        manifest = await fetchJSON(REPLAY_BADGE_DEV_FIRMWARE_BASE + 'manifest.json')
+    } catch (err) {
+        throw new Error(`Local dev build not staged at ${REPLAY_BADGE_DEV_FIRMWARE_BASE}. ` +
+            `Run \`npm run start\` from JumperIDE with the badge .pio/build/echo-dev directory present, ` +
+            `or set REPLAY_BADGE_DEV_BUILD_DIR before building.`)
+    }
+    if (!manifest || !Array.isArray(manifest.files) || !manifest.files.length) {
+        throw new Error('Dev build manifest is empty.')
+    }
+    fwLog(`Source: ${manifest.source}`)
+    const images = []
+    for (const f of manifest.files) {
+        const url = REPLAY_BADGE_DEV_FIRMWARE_BASE + f.name
+        fwLog(`Fetching ${f.name} (${(f.size || 0).toLocaleString()} B) → 0x${f.address.toString(16).padStart(6, '0')}`)
+        const data = await readFirmwareSource({ url })
+        images.push({ name: f.name, address: f.address, data })
+    }
+    await flashBadgeWithImages(images)
+}
+
+async function flashBadgeFromReleaseAssets(update) {
+    const wanted = ['bootloader.bin', 'partitions.bin', 'boot_app0.bin', 'firmware.bin']
+    const assets = update.assets || []
+    const images = []
+    // Prefer multi-image flash if all four assets are present, otherwise fall
+    // back to flashing just firmware.bin at the app offset.
+    const haveAll = wanted.every(name => assets.some(a => a.name === name))
+    const candidates = haveAll
+        ? wanted.map(name => ({ name, asset: assets.find(a => a.name === name), address: REPLAY_BADGE_DEFAULT_OFFSETS[name] }))
+        : (() => {
+            const fw = assets.find(a => a.name === 'firmware.bin') || assets.find(a => /\.bin$/i.test(a.name))
+            if (!fw) throw new Error('No firmware .bin asset found in latest release.')
+            return [{ name: fw.name, asset: fw, address: 0x10000 }]
+        })()
+
+    for (const c of candidates) {
+        fwLog(`Fetching ${c.name} → 0x${c.address.toString(16).padStart(6, '0')}`)
+        const data = await readFirmwareSource({ url: c.asset.browser_download_url })
+        images.push({ name: c.name, address: c.address, data })
+    }
+    await flashBadgeWithImages(images)
+}
+
+async function flashBadgeWithImages(images) {
+    if (!images || !images.length) throw new Error('No images to flash.')
+    const total = images.reduce((s, i) => s + i.data.length, 0)
+    fwLog(`Total: ${total.toLocaleString()} bytes across ${images.length} image(s).`)
+
+    // Release the active REPL port (if any) and grab the SerialPort handle so
+    // esptool-js can use it directly without a second port picker.
+    let sp = null
+    if (port && typeof port.releaseStreams === 'function') {
+        fwLog('Releasing REPL session…')
+        sp = await port.releaseStreams()
+        const oldPort = port
+        port = null
+        devInfo = null
+        hideFirmwareUpdateBanner()
+        for (const t of ['ws', 'ble', 'usb']) QID(`btn-conn-${t}`).classList.remove('connected')
+        resetRunButton()
+        try { oldPort.disconnectCallback = () => {} } catch (_) {}
+    }
+
+    await flashReplayBadge({
+        serialPort: sp,
+        images,
+        onLog: (m) => fwLog(m),
+        onProgress: (fileIndex, written, _t, name) => {
+            // Map per-file progress to overall bytes for a smooth bar.
+            let done = 0
+            for (let i = 0; i < fileIndex && i < images.length; i++) done += images[i].data.length
+            done += written
+            fwProgress(done, total)
+            if (name && written === images[fileIndex]?.data.length) fwLog(`✓ ${name} written (${written.toLocaleString()} B)`)
+        },
+    })
+
+    toastr.success('Badge flashed. Reconnect via the USB button when it reboots.', 'Firmware updated')
+}
+
+function pickFile(accept = '*/*') {
+    return new Promise((resolve) => {
+        const { fileInput } = fwModalEls()
+        fileInput.value = ''
+        fileInput.accept = accept
+        const handler = () => {
+            fileInput.removeEventListener('change', handler)
+            const f = fileInput.files && fileInput.files[0]
+            resolve(f || null)
+        }
+        fileInput.addEventListener('change', handler, { once: true })
+        fileInput.click()
+    })
 }
 
 window.addEventListener('visibilitychange', function () {

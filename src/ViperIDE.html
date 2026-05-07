@@ -39,6 +39,10 @@
             <button title="Toggle full-screen mode for the whole IDE" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
         </div>
     </div>
+    <div id="firmware-update-banner" class="hidden" onclick="app.startFirmwareUpdate()" title="Click to update firmware">
+        <span id="firmware-update-banner-text"></span>
+        <button type="button" class="firmware-update-banner-close" title="Dismiss" onclick="event.stopPropagation(); app.dismissFirmwareUpdateBanner()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
     <div id="container">
         <div id="overlay" onclick="app.autoHideSideMenu()"></div>
         <div id="side-menu">
@@ -178,6 +182,23 @@
                     <div class="title-lines" id="menu-line-docs">docs</div>
                     <div id="custom-doc-sites-container"></div>
                     <button type="button" id="custom-doc-add" title="Add another documentation site URL to the API Reference picker">Add doc site</button>
+                    <div class="title-lines" id="menu-line-firmware">firmware updates</div>
+                    <div class="space-between" title="GitHub releases page for the Jumperless firmware. JumperIDE checks the latest release tag here and offers to flash firmware.uf2.">
+                        <label for="jumperless-firmware-url">Jumperless URL:</label>
+                        <input type="url" id="jumperless-firmware-url" placeholder="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" value="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" style="flex:1; min-width:0;"/>
+                    </div>
+                    <div class="space-between" title="GitHub releases page for the Replay Badge firmware. Once releases are published, JumperIDE will fetch firmware.bin from the latest tag.">
+                        <label for="replay-badge-firmware-url">Replay Badge URL:</label>
+                        <input type="url" id="replay-badge-firmware-url" placeholder="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" value="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" style="flex:1; min-width:0;"/>
+                    </div>
+                    <div title="Use the locally compiled badge build from .pio/build/echo-dev/ instead of fetching from GitHub. The IDE dev server stages those bins under /dev-firmware/replay-badge/ at startup. Only flashes bootloader, partitions, OTA selector, and app — the FAT filesystem partition (your saved files) is left untouched."><input type="checkbox" id="replay-badge-use-local-build"/><label for="replay-badge-use-local-build" title="Use the locally compiled badge build from .pio/build/echo-dev/">🧪 Replay Badge: flash local dev build</label></div>
+                    <div class="space-between" style="margin-top:6px;" title="Open the firmware flasher even when the device is up-to-date — handy for re-flashing, recovering a bricked board, or testing a local build.">
+                        <span style="opacity:0.8;">Force flash:</span>
+                        <span>
+                            <button type="button" id="btn-force-flash-jumperless" title="Open the Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless')">Jumperless…</button>
+                            <button type="button" id="btn-force-flash-badge" title="Open the Replay Badge firmware flasher" onclick="app.forceFirmwareUpdate('replay-badge')">Replay Badge…</button>
+                        </span>
+                    </div>
                 </div>
             </div>
             <div id="menu-about" class="tab-content">
@@ -240,6 +261,26 @@
         </div>
     </div>
     <div id="dpi-ruler" style="position:absolute;height:1in;width:1in;left:-100%;top:-100%;"></div>
+
+    <div id="firmware-update-modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="firmware-update-modal-title">
+        <div class="firmware-update-modal-backdrop" onclick="app.closeFirmwareUpdateModal()"></div>
+        <div class="firmware-update-modal-card">
+            <div class="firmware-update-modal-header">
+                <span id="firmware-update-modal-title">Firmware Update</span>
+                <button type="button" class="firmware-update-modal-close" title="Close" onclick="app.closeFirmwareUpdateModal()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="firmware-update-modal-body">
+                <div id="firmware-update-modal-summary"></div>
+                <div id="firmware-update-modal-instructions"></div>
+                <div id="firmware-update-modal-actions"></div>
+                <pre id="firmware-update-modal-log" class="hidden"></pre>
+                <div id="firmware-update-modal-progress" class="hidden">
+                    <div id="firmware-update-modal-progress-bar"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <input type="file" id="firmware-update-file-input" accept=".bin,.uf2" style="display:none"/>
 
     <script>window.analytics = { _writeKey: "WdDAz9IvQknVcbSS" }</script>
     <script src="https://unpkg.com/@june-so/analytics-next@2.0.0/dist/umd/standalone.js" integrity="sha256-mm/qRhmZXfHLF27WLTxbnMVhPgFMOsxvjYXk3NpaKnc=" crossorigin="anonymous"></script>

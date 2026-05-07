@@ -73,8 +73,10 @@ export function updateSetting(setting, newValue) {
         settingElement.value = newValue
     } else if (settingElement.type == "checkbox") {
         settingElement.checked = newValue
+    } else if (settingElement.type == "text" || settingElement.type == "url") {
+        settingElement.value = newValue
     } else {
-        console.error(`Element is not <select> or <input type="checkbox">: ${settingElement}`)
+        console.error(`Element is not <select>, <input type="checkbox">, or <input type="text|url">: ${settingElement}`)
     }
 
     // set our local cache
@@ -137,6 +139,9 @@ function _loadSettings() {
     settingsElement.querySelectorAll("select").forEach(element => {
         _setLoadedValue(element.id, loadedSettings[element.id], element.value, (value) => element.value = value)
     })
+    settingsElement.querySelectorAll("input[type='text'], input[type='url']").forEach(element => {
+        _setLoadedValue(element.id, loadedSettings[element.id], element.value, (value) => element.value = value)
+    })
 
     // Custom doc sites (not in DOM): ensure defaults and persist so they survive next DOM-only persist
     if (!Array.isArray(loadedSettings.customDocSites) || loadedSettings.customDocSites.length === 0) {
@@ -161,6 +166,9 @@ function _persistSettings(newSettings = undefined) {
             newSettings[element.id] = element.checked
         })
         settingsElement.querySelectorAll("select").forEach(element => {
+            newSettings[element.id] = element.value
+        })
+        settingsElement.querySelectorAll("input[type='text'], input[type='url']").forEach(element => {
             newSettings[element.id] = element.value
         })
         // preserve custom doc sites and selected index (not in DOM); never reference `settings` here

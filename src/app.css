@@ -47,6 +47,160 @@ body.api-ref-open #tool-panel #btn-api-ref {
     color: var(--fg-color-highlight);
 }
 
+#firmware-update-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 6px 12px;
+    background: linear-gradient(90deg, #d97706 0%, #f59e0b 50%, #d97706 100%);
+    color: #1a1208;
+    font-weight: 600;
+    font-size: 13px;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid rgba(0,0,0,0.25);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    position: relative;
+    z-index: 5;
+    transition: background 0.15s ease;
+}
+#firmware-update-banner:hover {
+    background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 50%, #f59e0b 100%);
+}
+#firmware-update-banner.hidden {
+    display: none;
+}
+#firmware-update-banner #firmware-update-banner-text a {
+    color: inherit;
+    text-decoration: underline;
+}
+#firmware-update-banner .firmware-update-banner-close {
+    background: transparent;
+    border: none;
+    color: #1a1208;
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 14px;
+    opacity: 0.7;
+}
+#firmware-update-banner .firmware-update-banner-close:hover {
+    opacity: 1;
+}
+
+#firmware-update-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#firmware-update-modal.hidden { display: none; }
+.firmware-update-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+}
+.firmware-update-modal-card {
+    position: relative;
+    background: var(--bg-color, #1e1e1e);
+    color: var(--fg-color, #e6e6e6);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    width: min(640px, 92vw);
+    max-height: 86vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+    overflow: hidden;
+}
+.firmware-update-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: linear-gradient(90deg, #d97706 0%, #f59e0b 100%);
+    color: #1a1208;
+    font-weight: 700;
+    font-size: 14px;
+}
+.firmware-update-modal-close {
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+    opacity: 0.8;
+}
+.firmware-update-modal-close:hover { opacity: 1; }
+.firmware-update-modal-body {
+    padding: 16px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.firmware-update-modal-body code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.95em;
+}
+.firmware-update-modal-body ol,
+.firmware-update-modal-body ul {
+    padding-left: 22px;
+    margin: 8px 0;
+}
+.firmware-update-modal-body button.fw-btn {
+    background: #f59e0b;
+    color: #1a1208;
+    border: none;
+    border-radius: 5px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+    margin: 6px 8px 0 0;
+}
+.firmware-update-modal-body button.fw-btn.secondary {
+    background: rgba(255,255,255,0.12);
+    color: var(--fg-color, #e6e6e6);
+}
+.firmware-update-modal-body button.fw-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+#firmware-update-modal-log {
+    margin-top: 12px;
+    background: #0a0a0a;
+    color: #9ad;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 5px;
+    padding: 8px 10px;
+    max-height: 240px;
+    overflow-y: auto;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+#firmware-update-modal-log.hidden { display: none; }
+#firmware-update-modal-progress {
+    margin-top: 10px;
+    height: 8px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+#firmware-update-modal-progress.hidden { display: none; }
+#firmware-update-modal-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    transition: width 0.15s ease;
+}
+
 #container {
     display: flex;
     flex: 1;
