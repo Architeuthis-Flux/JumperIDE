@@ -68,35 +68,62 @@ const REPLAY_BADGE_DEV_BUILD_DIR = process.env.REPLAY_BADGE_DEV_BUILD_DIR
   || `${process.env.HOME || ''}/Documents/GitHub/Temporal-Badge/firmware/.pio/build/echo-dev`
 const REPLAY_BADGE_BOOT_APP0 = process.env.REPLAY_BADGE_BOOT_APP0
   || `${process.env.HOME || ''}/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin`
-try {
-  if (fs.existsSync(REPLAY_BADGE_DEV_BUILD_DIR)) {
+
+// Standard ESP32-S3 split image. Offsets match what `pio run -t upload` does
+// internally (esptool write_flash 0x0 boot 0x8000 partitions 0xe000 boot_app0
+// 0x10000 firmware). Filesystem partition (ffat) is intentionally absent so
+// flashing preserves user files on the badge.
+const REPLAY_BADGE_IMAGES = [
+  { src: () => path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'bootloader.bin'),  name: 'bootloader.bin', address: 0x0000 },
+  { src: () => path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'partitions.bin'),  name: 'partitions.bin', address: 0x8000 },
+  { src: () => REPLAY_BADGE_BOOT_APP0,                                   name: 'boot_app0.bin',  address: 0xe000 },
+  { src: () => path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'firmware.bin'),    name: 'firmware.bin',   address: 0x10000 },
+]
+
+function stageReplayBadgeDevFirmware({ quiet = false } = {}) {
+  try {
+    if (!fs.existsSync(REPLAY_BADGE_DEV_BUILD_DIR)) return
     const destDir = 'build/dev-firmware/replay-badge'
     fs.mkdirSync(destDir, { recursive: true })
-    // Standard ESP32-S3 split image. Offsets match what `pio run -t upload`
-    // does internally (esptool write_flash 0x0 boot 0x8000 partitions 0xe000
-    // boot_app0 0x10000 firmware).
-    const images = [
-      { src: path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'bootloader.bin'),  name: 'bootloader.bin', address: 0x0000 },
-      { src: path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'partitions.bin'),  name: 'partitions.bin', address: 0x8000 },
-      { src: REPLAY_BADGE_BOOT_APP0,                                   name: 'boot_app0.bin',  address: 0xe000 },
-      { src: path.join(REPLAY_BADGE_DEV_BUILD_DIR, 'firmware.bin'),    name: 'firmware.bin',   address: 0x10000 },
-    ]
-    const manifest = { source: REPLAY_BADGE_DEV_BUILD_DIR, generatedAt: new Date().toISOString(), files: [] }
-    for (const img of images) {
-      if (!fs.existsSync(img.src)) {
-        console.warn(`[rollup] Replay Badge: missing ${img.src}, skipping`)
+    const manifest = { source: REPLAY_BADGE_DEV_BUILD_DIR, generatedAt: new Date().toISOString(), files: [], missing: [] }
+    for (const img of REPLAY_BADGE_IMAGES) {
+      const src = img.src()
+      if (!fs.existsSync(src)) {
+        manifest.missing.push({ name: img.name, address: img.address, src })
         continue
       }
-      fs.copyFileSync(img.src, path.join(destDir, img.name))
-      const stat = fs.statSync(img.src)
+      fs.copyFileSync(src, path.join(destDir, img.name))
+      const stat = fs.statSync(src)
       manifest.files.push({ name: img.name, address: img.address, size: stat.size, mtime: stat.mtimeMs })
     }
     fs.writeFileSync(path.join(destDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
-    console.log(`[rollup] Staged Replay Badge dev firmware from ${REPLAY_BADGE_DEV_BUILD_DIR} (${manifest.files.length} files)`)
+    if (!quiet) {
+      const summary = `${manifest.files.length}/${REPLAY_BADGE_IMAGES.length} files`
+      if (manifest.missing.length) {
+        console.warn(`[rollup] Replay Badge dev firmware: ${summary} from ${REPLAY_BADGE_DEV_BUILD_DIR}; ` +
+          `missing ${manifest.missing.map(m => m.name).join(', ')} (PlatformIO probably mid-rebuild)`)
+      } else {
+        console.log(`[rollup] Staged Replay Badge dev firmware from ${REPLAY_BADGE_DEV_BUILD_DIR} (${summary})`)
+      }
+    }
+    return manifest
+  } catch (err) {
+    console.warn('[rollup] Could not stage Replay Badge dev firmware:', err.message)
   }
-} catch (err) {
-  console.warn('[rollup] Could not stage Replay Badge dev firmware:', err.message)
 }
+
+// Initial pass at config-load.
+stageReplayBadgeDevFirmware()
+
+// Re-stage on every rollup rebuild so the manifest stays in sync with the
+// PlatformIO output. Every save that triggers a rollup tick will pick up new
+// .pio bins as soon as PlatformIO finishes writing them.
+const restageDevFirmwarePlugin = () => ({
+  name: 'jumperide-restage-dev-firmware',
+  buildStart() {
+    stageReplayBadgeDevFirmware({ quiet: false })
+  },
+})
 
 const common = (args, name) => ({
   output: {
@@ -139,6 +166,7 @@ const common = (args, name) => ({
     args.configDebug && sourcemaps(),
     !args.configDebug && terser(),
     args.configDebug && serve({ contentBase: "build", port: 10001 }),
+    restageDevFirmwarePlugin(),
   ]
 })
 

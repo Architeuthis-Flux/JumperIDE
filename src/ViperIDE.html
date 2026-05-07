@@ -29,6 +29,10 @@
             <button title="Save the current file to your connected device [Ctrl+S]" onclick="app.saveCurrentFile()" id="btn-save"><i class="fa-solid fa-download"></i></button>
             <button title="Run the current Python file on the device. Click again to stop. [F5]" onclick="app.runCurrentFile()"  id="btn-run"><img id="btn-run-icon" src="assets/iconPlay1024.png" alt="Run" class="btn-run-img"/></button>
         </div>
+        <div id="firmware-update-banner" class="hidden" onclick="app.startFirmwareUpdate()" title="Click to update firmware">
+            <span id="firmware-update-banner-text"></span>
+            <button type="button" class="firmware-update-banner-close" title="Dismiss" onclick="event.stopPropagation(); app.dismissFirmwareUpdateBanner()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
         <div>
             <span id="conn-advanced-buttons" style="display: none;">
                 <button title="Connect to a MicroPython device over WebREPL (WebSocket). Advanced; usually USB is what you want." onclick="app.connectDevice('ws')"  id="btn-conn-ws" ><i class="fa-solid fa-link"></i></button>
@@ -38,10 +42,6 @@
             <button title="Show/hide the API Reference panel — searchable docs for MicroPython and the Jumperless API" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
             <button title="Toggle full-screen mode for the whole IDE" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
         </div>
-    </div>
-    <div id="firmware-update-banner" class="hidden" onclick="app.startFirmwareUpdate()" title="Click to update firmware">
-        <span id="firmware-update-banner-text"></span>
-        <button type="button" class="firmware-update-banner-close" title="Dismiss" onclick="event.stopPropagation(); app.dismissFirmwareUpdateBanner()"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <div id="container">
         <div id="overlay" onclick="app.autoHideSideMenu()"></div>
@@ -192,6 +192,19 @@
                         <input type="url" id="replay-badge-firmware-url" placeholder="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" value="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" style="flex:1; min-width:0;"/>
                     </div>
                     <div title="Use the locally compiled badge build from .pio/build/echo-dev/ instead of fetching from GitHub. The IDE dev server stages those bins under /dev-firmware/replay-badge/ at startup. Only flashes bootloader, partitions, OTA selector, and app — the FAT filesystem partition (your saved files) is left untouched."><input type="checkbox" id="replay-badge-use-local-build"/><label for="replay-badge-use-local-build" title="Use the locally compiled badge build from .pio/build/echo-dev/">🧪 Replay Badge: flash local dev build</label></div>
+                    <div class="space-between" title="Baud rate used while flashing the badge over USB. 115200 is the safe default. Bump it for faster flashes if your USB connection is clean.">
+                        <label for="replay-badge-flash-baud">Flash baud:</label>
+                        <select id="replay-badge-flash-baud" title="Flash baud rate">
+                            <option value="115200" selected>115200</option>
+                            <option value="230400">230400</option>
+                            <option value="460800">460800</option>
+                            <option value="921600">921600</option>
+                        </select>
+                    </div>
+                    <div class="space-between" style="margin-top:6px;" title="Re-poll the configured release feed for the currently connected device. The IDE only checks once at connect, so use this after publishing a new release without reconnecting.">
+                        <span style="opacity:0.8;">Check for updates:</span>
+                        <button type="button" id="btn-refresh-firmware-check" title="Re-poll the configured release feed for the connected device" onclick="app.refreshFirmwareCheck()">Check now</button>
+                    </div>
                     <div class="space-between" style="margin-top:6px;" title="Open the firmware flasher even when the device is up-to-date — handy for re-flashing, recovering a bricked board, or testing a local build.">
                         <span style="opacity:0.8;">Force flash:</span>
                         <span>
@@ -268,6 +281,7 @@
             <div class="firmware-update-modal-header">
                 <span id="firmware-update-modal-title">Firmware Update</span>
                 <button type="button" class="firmware-update-modal-close" title="Close" onclick="app.closeFirmwareUpdateModal()"><i class="fa-solid fa-xmark"></i></button>
+                <button type="button" class="firmware-update-modal-cancel" title="Cancel the in-progress flash" onclick="app.cancelFirmwareFlash()"><i class="fa-solid fa-circle-stop"></i> Cancel flash</button>
             </div>
             <div class="firmware-update-modal-body">
                 <div id="firmware-update-modal-summary"></div>

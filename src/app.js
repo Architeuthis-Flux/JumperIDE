@@ -232,15 +232,32 @@ async function prepareNewPort(type) {
     return new_port
 }
 
-export async function connectDevice(type) {
+export async function connectDevice(type, { existingSerialPort = null, silent = false } = {}) {
     if (port) {
         //if (!confirm('Disconnect current device?')) { return }
         await disconnectDevice()
         return
     }
 
-    const new_port = await prepareNewPort(type)
-    if (!new_port) { return }
+    let new_port
+    if (existingSerialPort && type === 'usb') {
+        // Reuse a SerialPort we already have access to (typically right after a
+        // firmware flash). Skips the OS port picker entirely.
+        if (typeof navigator.serial === 'undefined' || getSetting('force-serial-poly')) {
+            new_port = new WebSerial(webSerialPolyfill)
+        } else {
+            new_port = new WebSerial()
+        }
+        try {
+            await new_port.requestAccess(existingSerialPort)
+        } catch (err) {
+            if (!silent) report('Cannot reconnect', err)
+            return
+        }
+    } else {
+        new_port = await prepareNewPort(type)
+        if (!new_port) { return }
+    }
     // Connect new port
     try {
         await new_port.connect()
@@ -349,6 +366,10 @@ export async function connectDevice(type) {
         if (lastErr) {
             if (lastErr.message.includes('Timeout')) {
                 report('Device is not responding', new Error(`Ensure that:\n- You're using a recent version of MicroPython\n- The correct device is selected`))
+                // Port opened but the REPL never answered — common after a bad
+                // flash, or when an ESP32-S3 boots into a hung user app. Offer
+                // to (re)flash. Only ask once per connect.
+                offerRecoveryFlashIfBricked(type)
             } else {
                 report('Error reading board info', lastErr)
             }
@@ -3027,10 +3048,16 @@ let lastUpdateCheck = 0;
 
 async function checkForUpdates() {
     const now = new Date()
-    if (now - lastUpdateCheck < 60*60*1000) {
+    if (now - lastUpdateCheck < 60*20*1000) {
         return
     }
     lastUpdateCheck = now
+
+    // Also re-poll the device firmware feed so the banner shows up once a new
+    // release lands without the user reconnecting. No-op when no device.
+    if (devInfo) {
+        refreshFirmwareCheck().catch((err) => console.warn('Firmware re-check failed', err))
+    }
 
     const current_version = VIPER_IDE_VERSION
     QID('viper-ide-version').innerHTML = current_version
@@ -3154,9 +3181,22 @@ async function _raw_readDeviceFirmwareVersion(raw, devInfo) {
         return null
     }
     if (kind === 'replay-badge') {
-        // Badge firmware embeds the version in MICROPY_BANNER_MACHINE so it
-        // appears as `Replay Badge v<X.Y.Z> with ESP32-S3` in os.uname().machine
+        // Badge firmware embeds the version in MICROPY_BANNER_MACHINE
         // (see firmware/lib/micropython_embed/src/mpconfigport.h).
+        // MICROPY_BANNER_MACHINE is exposed at runtime as
+        // sys.implementation._machine — that's what ends up in the REPL banner
+        // greeting `Replay Badge v0.1.1 with ESP32-S3`. os.uname().machine on
+        // this port doesn't include the version (it's built from
+        // MICROPY_HW_BOARD_NAME alone), so we read _machine directly.
+        try {
+            const rsp = await raw.exec(
+                `import sys\nprint(getattr(sys.implementation, '_machine', ''))\n`
+            )
+            const m = (rsp || '').match(/v(\d+(?:\.\d+){1,3})/i)
+            if (m) return m[1]
+        } catch (_err) { /* fall through to machine field */ }
+        // Fallback: in case a future firmware embeds the version directly in
+        // MICROPY_HW_BOARD_NAME, also try os.uname().machine.
         const machine = devInfo.machine || ''
         const m = machine.match(/v(\d+(?:\.\d+){1,3})/i)
         if (m) return m[1]
@@ -3264,6 +3304,11 @@ async function checkFirmwareUpdate(info) {
         latestVersion: latest.version,
         releaseUrl: latest.releaseUrl,
         localPath: latest.localPath || null,
+        // Carry the asset list through so banner-driven modal opens see the
+        // release's firmware.bin / bootloader.bin / etc. without needing to
+        // re-fetch the release feed.
+        assets: Array.isArray(latest.assets) ? latest.assets : [],
+        usingFallback: !!latest.usingFallback,
     }
     showFirmwareUpdateBanner(pendingFirmwareUpdate)
 }
@@ -3282,9 +3327,12 @@ function showFirmwareUpdateBanner(update) {
     const text = QID('firmware-update-banner-text')
     if (!banner || !text) return
     if (bannerDismissedFor(update)) return
-    text.innerHTML = `Your <strong>${sanitizeHTML(update.label)}</strong> firmware is out of date ` +
-        `(installed <code>${sanitizeHTML(update.currentVersion)}</code>, latest ` +
-        `<code>${sanitizeHTML(update.latestVersion)}</code>) — click here to update.`
+    // Compact text now that the banner lives inline in the tool panel pill.
+    // Full version detail is shown in the modal headline anyway.
+    text.innerHTML = `${sanitizeHTML(update.label)} ` +
+        `<code>${sanitizeHTML(update.latestVersion)}</code> available — click to update firmware`
+    banner.title = `Click to update ${update.label} firmware ` +
+        `(installed ${update.currentVersion}, latest ${update.latestVersion})`
     banner.classList.remove('hidden')
 }
 
@@ -3309,6 +3357,63 @@ export function startFirmwareUpdate() {
     const update = pendingFirmwareUpdate
     if (!update) return
     openFirmwareUpdateModal(update)
+}
+
+/**
+ * Re-poll the firmware release feed for the currently connected device. Use
+ * after publishing a new release if you don't want to disconnect/reconnect.
+ * Also invalidates any prior "I dismissed this banner" memory so a freshly
+ * available version shows up again.
+ */
+/**
+ * Called when we managed to open the serial port but every REPL probe timed
+ * out. That's the classic "device is on the bus but no firmware is talking"
+ * symptom — bad flash, hung user app, or a board that just rebooted into a
+ * crash loop. Pop a non-blocking toast offering to re-flash.
+ */
+function offerRecoveryFlashIfBricked(connectionType) {
+    // USB only — flashing over WebSocket / BLE doesn't make sense.
+    if (connectionType !== 'usb') return
+    // Default to badge since that's the only path we can flash entirely
+    // in-browser; the user can switch in the modal if they actually have a
+    // Jumperless connected.
+    const html = `Device opened the serial port but didn't respond to the REPL probe. ` +
+        `It might be running a hung script or have bad firmware.<br><br>` +
+        `<button class="fw-toast-yes" style="margin-right:8px;">Flash Replay Badge</button>` +
+        `<button class="fw-toast-jl">Flash Jumperless</button>`
+    const $toast = toastr.warning(html, 'Device not responding', {
+        timeOut: 0,
+        extendedTimeOut: 0,
+        closeButton: true,
+        tapToDismiss: false,
+        escapeHtml: false,
+    })
+    if ($toast && $toast.length) {
+        $toast.find('.fw-toast-yes').on('click', (e) => {
+            e.stopPropagation()
+            toastr.clear($toast)
+            forceFirmwareUpdate('replay-badge')
+        })
+        $toast.find('.fw-toast-jl').on('click', (e) => {
+            e.stopPropagation()
+            toastr.clear($toast)
+            forceFirmwareUpdate('jumperless')
+        })
+    }
+}
+
+export async function refreshFirmwareCheck() {
+    if (!devInfo) {
+        toastr.warning('Connect a device first.')
+        return
+    }
+    try { localStorage.removeItem(FIRMWARE_BANNER_DISMISS_KEY) } catch (_) {}
+    pendingFirmwareUpdate = null
+    hideFirmwareUpdateBanner()
+    await checkFirmwareUpdate(devInfo)
+    if (!pendingFirmwareUpdate) {
+        toastr.info('Device firmware is up to date.')
+    }
 }
 
 /**
@@ -3383,8 +3488,11 @@ function fwLog(msg) {
     const { log } = fwModalEls()
     if (!log) return
     log.classList.remove('hidden')
-    log.textContent += (log.textContent ? '\n' : '') + msg
+    const text = String(msg)
+    log.textContent += (log.textContent ? '\n' : '') + text
     log.scrollTop = log.scrollHeight
+    // Echo errors to the console so DevTools has the full stack trace.
+    if (/^ERROR/i.test(text)) console.error('[firmware]', text)
 }
 
 function fwProgress(written, total) {
@@ -3395,18 +3503,50 @@ function fwProgress(written, total) {
     progressBar.style.width = pct + '%'
 }
 
-export function closeFirmwareUpdateModal() {
+/* In-flight flash bookkeeping. While a flash is running we lock the modal
+ * (no backdrop close, header X turns into a Cancel button) so the user can't
+ * accidentally hide the progress UI mid-write. Cancel triggers an
+ * AbortController that disconnects the esptool-js transport, which fails the
+ * pending writeFlash with a clear error. */
+let firmwareFlashInProgress = false
+let firmwareFlashAbort = null
+
+export function closeFirmwareUpdateModal({ force = false } = {}) {
+    if (firmwareFlashInProgress && !force) {
+        // Don't let backdrop / header X dismiss the modal while a flash is
+        // in flight. Surface a tiny hint instead.
+        toastr.warning('A flash is in progress. Use Cancel to abort it before closing.', 'Flashing…', { timeOut: 2500 })
+        return
+    }
     const { modal, log, progress, progressBar } = fwModalEls()
     if (!modal) return
     modal.classList.add('hidden')
+    modal.classList.remove('flashing')
     if (log) { log.textContent = ''; log.classList.add('hidden') }
     if (progress) progress.classList.add('hidden')
     if (progressBar) progressBar.style.width = '0%'
 }
 
+/** Cancel the running flash, if any. Wired to the header X while flashing. */
+export function cancelFirmwareFlash() {
+    if (!firmwareFlashInProgress || !firmwareFlashAbort) return
+    fwLog('Cancel requested — aborting flash…')
+    try { firmwareFlashAbort.abort() } catch (_) {}
+}
+
+function setFirmwareFlashInProgress(on) {
+    firmwareFlashInProgress = !!on
+    const { modal } = fwModalEls()
+    if (!modal) return
+    modal.classList.toggle('flashing', firmwareFlashInProgress)
+}
+
 function openFirmwareUpdateModal(update) {
     const { modal, summary, instructions, actions } = fwModalEls()
     if (!modal) return
+    // Opening the modal expresses intent to update — clear any prior banner
+    // dismissal so re-checks don't suppress the banner the next time around.
+    try { localStorage.removeItem(FIRMWARE_BANNER_DISMISS_KEY) } catch (_) {}
 
     const installed = update.currentVersion || 'unknown'
     const latest = update.latestVersion || 'unknown'
@@ -3518,10 +3658,11 @@ async function rebootJumperlessIntoBootsel() {
     }
     const sp = await port.releaseStreams()
     // Drop our handle to the REPL port so onDisconnect doesn't fire spuriously.
+    // Banner stays visible; it'll naturally clear when the device disconnects
+    // after BOOTSEL or comes back with a newer firmware version.
     const oldPort = port
     port = null
     devInfo = null
-    hideFirmwareUpdateBanner()
     for (const t of ['ws', 'ble', 'usb']) QID(`btn-conn-${t}`).classList.remove('connected')
     resetRunButton()
     try { oldPort.disconnectCallback = () => {} } catch (_) {}
@@ -3588,8 +3729,12 @@ function renderBadgeModal(update, instructions, actions) {
         btnLocal.textContent = 'Flash dev build'
         btnLocal.onclick = async () => {
             btnLocal.disabled = true
-            try { await flashBadgeFromLocalDevBuild() }
-            catch (err) { fwLog('ERROR: ' + (err.message || err)) }
+            try {
+                // Grab the SerialPort *before* any awaits so we still have a
+                // user gesture for navigator.serial.requestPort().
+                const sp = await acquireBadgeSerialPort()
+                await flashBadgeFromLocalDevBuild(sp)
+            } catch (err) { fwLog('ERROR: ' + (err.message || err)) }
             finally { btnLocal.disabled = false }
         }
         actions.appendChild(btnLocal)
@@ -3599,8 +3744,10 @@ function renderBadgeModal(update, instructions, actions) {
         btnFlash.textContent = 'Flash badge'
         btnFlash.onclick = async () => {
             btnFlash.disabled = true
-            try { await flashBadgeFromReleaseAssets(update) }
-            catch (err) { fwLog('ERROR: ' + (err.message || err)) }
+            try {
+                const sp = await acquireBadgeSerialPort()
+                await flashBadgeFromReleaseAssets(update, sp)
+            } catch (err) { fwLog('ERROR: ' + (err.message || err)) }
             finally { btnFlash.disabled = false }
         }
         actions.appendChild(btnFlash)
@@ -3612,9 +3759,15 @@ function renderBadgeModal(update, instructions, actions) {
     btnPickFile.onclick = async () => {
         btnPickFile.disabled = true
         try {
+            // Acquire the SerialPort up front so the picker that follows
+            // doesn't break the user-gesture chain.
+            const sp = await acquireBadgeSerialPort()
             const f = await pickFile('.bin')
             if (!f) { fwLog('Cancelled.'); return }
-            await flashBadgeWithImages([{ name: 'firmware.bin', address: 0x10000, data: new Uint8Array(await f.arrayBuffer()) }])
+            await flashBadgeWithImages(
+                [{ name: 'firmware.bin', address: 0x10000, data: new Uint8Array(await f.arrayBuffer()) }],
+                sp,
+            )
         } catch (err) {
             fwLog('ERROR: ' + (err.message || err))
         } finally {
@@ -3632,7 +3785,56 @@ function renderBadgeModal(update, instructions, actions) {
     actions.appendChild(btnRelease)
 }
 
-async function flashBadgeFromLocalDevBuild() {
+/**
+ * Resolve a SerialPort suitable for esptool-js. Must be called from inside
+ * a click handler (synchronously, before any awaits) so the user-gesture is
+ * still alive for navigator.serial.requestPort().
+ *
+ * If we already have an active REPL session, release its streams and return
+ * that SerialPort directly — no second port picker.
+ */
+async function acquireBadgeSerialPort() {
+    if (port && typeof port.releaseStreams === 'function') {
+        fwLog('Releasing REPL session…')
+        let sp
+        try {
+            sp = await port.releaseStreams()
+        } catch (err) {
+            throw new Error(
+                `Couldn't release the REPL serial session cleanly (${err.message || err}). ` +
+                `Click the USB button to disconnect, then try again.`
+            )
+        }
+        const oldPort = port
+        port = null
+        devInfo = null
+        for (const t of ['ws', 'ble', 'usb']) QID(`btn-conn-${t}`).classList.remove('connected')
+        resetRunButton()
+        try { oldPort.disconnectCallback = () => {} } catch (_) {}
+        return sp
+    }
+    if (typeof navigator.serial === 'undefined') {
+        throw new Error('Web Serial API not available in this browser. Use Chrome, Edge, or Opera.')
+    }
+    fwLog('Select the badge serial port…')
+    try {
+        return await navigator.serial.requestPort()
+    } catch (err) {
+        if (err && err.name === 'NotFoundError') {
+            throw new Error('No serial port selected — cancelled.')
+        }
+        if (err && /Must be handling a user gesture/i.test(err.message || '')) {
+            throw new Error(
+                'Browser dropped the user-gesture before the picker opened. ' +
+                'This is usually a JumperIDE bug — click Flash again and it should work. ' +
+                'If not, reload the page.'
+            )
+        }
+        throw err
+    }
+}
+
+async function flashBadgeFromLocalDevBuild(serialPort = null) {
     fwLog('Loading staged dev build manifest…')
     let manifest
     try {
@@ -3646,19 +3848,59 @@ async function flashBadgeFromLocalDevBuild() {
         throw new Error('Dev build manifest is empty.')
     }
     fwLog(`Source: ${manifest.source}`)
+
+    // Sanity check: the badge build is ~2-3 MB. If the manifest is missing
+    // bootloader/partitions/app, we'd be doing a partial flash that bricks
+    // the device. Refuse and tell the user what's wrong.
+    const expected = ['bootloader.bin', 'partitions.bin', 'boot_app0.bin', 'firmware.bin']
+    const present = manifest.files.map(f => f.name)
+    const missing = (Array.isArray(manifest.missing) && manifest.missing.length)
+        ? manifest.missing.map(m => m.name)
+        : expected.filter(n => !present.includes(n))
+    if (missing.length) {
+        const missingDetail = missing.map(n => {
+            const m = (manifest.missing || []).find(x => x.name === n)
+            return m && m.src ? `${n} (${m.src})` : n
+        }).join(', ')
+        throw new Error(
+            `Dev build is incomplete — missing: ${missingDetail}.\n` +
+            `PlatformIO is probably still building. Wait for "pio run" to finish, ` +
+            `then save any source file in JumperIDE (or restart \`npm run start\`) ` +
+            `to re-stage the manifest, and try again.`
+        )
+    }
+
     const images = []
     for (const f of manifest.files) {
         const url = REPLAY_BADGE_DEV_FIRMWARE_BASE + f.name
         fwLog(`Fetching ${f.name} (${(f.size || 0).toLocaleString()} B) → 0x${f.address.toString(16).padStart(6, '0')}`)
-        const data = await readFirmwareSource({ url })
+        const data = await readFirmwareSource({ url, onLog: (m) => fwLog(m) })
         images.push({ name: f.name, address: f.address, data })
     }
-    await flashBadgeWithImages(images)
+    await flashBadgeWithImages(images, serialPort)
 }
 
-async function flashBadgeFromReleaseAssets(update) {
+async function flashBadgeFromReleaseAssets(update, serialPort = null) {
+    // Always re-poll the release feed at click time so we don't flash a stale
+    // cached asset list if a newer release dropped since the last hourly check.
+    let latest = update
+    try {
+        fwLog('Re-checking latest release…')
+        const fresh = await fetchLatestReplayBadgeRelease()
+        if (fresh && Array.isArray(fresh.assets) && fresh.assets.length) {
+            latest = { ...update, ...fresh }
+            if (fresh.version && fresh.version !== update.latestVersion) {
+                fwLog(`Newer release found: ${fresh.version} (was ${update.latestVersion || 'unknown'})`)
+            } else {
+                fwLog(`Using ${fresh.version || 'latest'}.`)
+            }
+        }
+    } catch (err) {
+        fwLog('Re-check failed, using cached asset list: ' + (err.message || err))
+    }
+
     const wanted = ['bootloader.bin', 'partitions.bin', 'boot_app0.bin', 'firmware.bin']
-    const assets = update.assets || []
+    const assets = latest.assets || []
     const images = []
     // Prefer multi-image flash if all four assets are present, otherwise fall
     // back to flashing just firmware.bin at the app offset.
@@ -3668,52 +3910,151 @@ async function flashBadgeFromReleaseAssets(update) {
         : (() => {
             const fw = assets.find(a => a.name === 'firmware.bin') || assets.find(a => /\.bin$/i.test(a.name))
             if (!fw) throw new Error('No firmware .bin asset found in latest release.')
+            // Single-image release: flash just the app slot. Filesystem and
+            // bootloader/partitions are left untouched.
             return [{ name: fw.name, asset: fw, address: 0x10000 }]
         })()
 
     for (const c of candidates) {
         fwLog(`Fetching ${c.name} → 0x${c.address.toString(16).padStart(6, '0')}`)
-        const data = await readFirmwareSource({ url: c.asset.browser_download_url })
+        // Prefer the browser-download URL — CORS proxies handle that path
+        // cleanly and it doesn't require a custom Accept header that would
+        // trigger a CORS preflight on the API endpoint.
+        const url = c.asset.browser_download_url || c.asset.url
+        const data = await readFirmwareSource({ url, onLog: (m) => fwLog(m) })
         images.push({ name: c.name, address: c.address, data })
     }
-    await flashBadgeWithImages(images)
+    await flashBadgeWithImages(images, serialPort)
 }
 
-async function flashBadgeWithImages(images) {
+async function flashBadgeWithImages(images, serialPort = null) {
     if (!images || !images.length) throw new Error('No images to flash.')
     const total = images.reduce((s, i) => s + i.data.length, 0)
     fwLog(`Total: ${total.toLocaleString()} bytes across ${images.length} image(s).`)
 
-    // Release the active REPL port (if any) and grab the SerialPort handle so
-    // esptool-js can use it directly without a second port picker.
-    let sp = null
-    if (port && typeof port.releaseStreams === 'function') {
-        fwLog('Releasing REPL session…')
-        sp = await port.releaseStreams()
-        const oldPort = port
-        port = null
-        devInfo = null
-        hideFirmwareUpdateBanner()
-        for (const t of ['ws', 'ble', 'usb']) QID(`btn-conn-${t}`).classList.remove('connected')
-        resetRunButton()
-        try { oldPort.disconnectCallback = () => {} } catch (_) {}
+    // Caller is expected to pre-acquire the SerialPort via
+    // acquireBadgeSerialPort() inside the click handler so the user-gesture
+    // is preserved for navigator.serial.requestPort(). If they didn't, fall
+    // back to the legacy in-flow acquisition (which can fail for the
+    // not-connected case after a long async fetch).
+    let sp = serialPort
+    if (!sp) {
+        sp = await acquireBadgeSerialPort()
     }
 
-    await flashReplayBadge({
-        serialPort: sp,
-        images,
-        onLog: (m) => fwLog(m),
-        onProgress: (fileIndex, written, _t, name) => {
-            // Map per-file progress to overall bytes for a smooth bar.
-            let done = 0
-            for (let i = 0; i < fileIndex && i < images.length; i++) done += images[i].data.length
-            done += written
-            fwProgress(done, total)
-            if (name && written === images[fileIndex]?.data.length) fwLog(`✓ ${name} written (${written.toLocaleString()} B)`)
-        },
-    })
+    // Banner stays visible during the flash on purpose: a successful flash
+    // reboots the board, which fires onDisconnect and hides it; if the
+    // flash fails or is cancelled, the banner remains so the user can retry
+    // without disconnecting/reconnecting.
 
-    toastr.success('Badge flashed. Reconnect via the USB button when it reboots.', 'Firmware updated')
+    const baudrateSetting = parseInt(getSetting('replay-badge-flash-baud'), 10)
+    const baudrate = Number.isFinite(baudrateSetting) && baudrateSetting > 0 ? baudrateSetting : 115200
+    if (baudrate !== 115200) fwLog(`Flash baud: ${baudrate}`)
+
+    // Stash usbProductId so reconnectAfterBadgeFlash() can find the same device
+    // back among navigator.serial.getPorts() once it re-enumerates.
+    let flashedUsbProductId = null
+    try { flashedUsbProductId = sp && sp.getInfo && sp.getInfo().usbProductId } catch (_) {}
+
+    // Lock the modal: backdrop click is now a no-op, the X button turns
+    // into "Cancel flash". An AbortController lets the user kill the flash
+    // mid-write — abort triggers transport.disconnect() inside esptool-js,
+    // which makes writeFlash() throw cleanly.
+    firmwareFlashAbort = new AbortController()
+    setFirmwareFlashInProgress(true)
+
+    let cancelled = false
+    firmwareFlashAbort.signal.addEventListener('abort', () => { cancelled = true }, { once: true })
+
+    try {
+        await flashReplayBadge({
+            serialPort: sp,
+            baudrate,
+            images,
+            abortSignal: firmwareFlashAbort.signal,
+            onLog: (m) => fwLog(m),
+            onProgress: (fileIndex, written, totalForImage, name) => {
+                // esptool-js reports COMPRESSED bytes-sent against COMPRESSED total
+                // for the current image. Convert to a fraction of this image, then
+                // weight by uncompressed sizes so the overall bar matches our
+                // "Total: X bytes across N image(s)" claim.
+                const imgSize = images[fileIndex]?.data.length || 0
+                const fraction = totalForImage > 0 ? written / totalForImage : 0
+                let done = 0
+                for (let i = 0; i < fileIndex && i < images.length; i++) done += images[i].data.length
+                done += Math.round(fraction * imgSize)
+                fwProgress(done, total)
+                if (name && fraction >= 1) fwLog(`✓ ${name} written (${imgSize.toLocaleString()} B)`)
+            },
+        })
+    } catch (err) {
+        if (cancelled) {
+            fwLog('Flash cancelled. The badge may be in an inconsistent state — re-flash before relying on it.')
+            toastr.warning('Flash cancelled.', 'Firmware update', { timeOut: 4000 })
+            throw new Error('Flash cancelled by user.')
+        }
+        throw err
+    } finally {
+        firmwareFlashAbort = null
+        setFirmwareFlashInProgress(false)
+    }
+
+    // Make sure the bar visibly reaches 100% even if the last progress event
+    // landed a fraction short due to rounding.
+    fwProgress(total, total)
+
+    toastr.success('Badge flashed. Reconnecting…', 'Firmware updated')
+
+    // Auto-reconnect once the badge re-enumerates as USB-Serial/JTAG. The
+    // browser keeps permission for the device across the reboot, so
+    // navigator.serial.getPorts() returns it without a picker. We give the
+    // chip a moment to come back, retry a few times, then fall back to a
+    // toast if it never reappears.
+    reconnectAfterBadgeFlash(flashedUsbProductId).catch((err) => {
+        console.warn('Auto-reconnect failed', err)
+        toastr.warning('Couldn\'t reconnect automatically. Click the USB button to reconnect.', 'Firmware updated')
+    })
+}
+
+async function reconnectAfterBadgeFlash(usbProductId) {
+    if (typeof navigator.serial === 'undefined') return
+
+    // Wait for the badge to actually finish booting and re-enumerate. The
+    // ESP32-S3 USB-Serial/JTAG controller comes up roughly 0.5-2 s after the
+    // reset; we poll for up to ~10 s.
+    const DEADLINE_MS = 10000
+    const POLL_MS = 500
+    const start = Date.now()
+    let candidate = null
+
+    while (Date.now() - start < DEADLINE_MS) {
+        await sleep(POLL_MS)
+        let ports
+        try { ports = await navigator.serial.getPorts() }
+        catch (_) { continue }
+        // Prefer a port matching the same usbProductId we just flashed; fall
+        // back to any granted USB-Serial/JTAG device (PID 0x1001) if there's
+        // exactly one.
+        const matchExact = ports.find((p) => {
+            try { return p.getInfo().usbProductId === usbProductId }
+            catch { return false }
+        })
+        const usbJtag = ports.filter((p) => {
+            try { return p.getInfo().usbProductId === 0x1001 }
+            catch { return false }
+        })
+        candidate = matchExact || (usbJtag.length === 1 ? usbJtag[0] : null)
+        if (candidate) break
+    }
+
+    if (!candidate) {
+        throw new Error('Badge did not re-appear within 10 seconds.')
+    }
+
+    // Hand the granted port back to the standard connect flow without popping
+    // the OS picker. connectDevice() will probe the device, refresh the file
+    // tree, and re-run the firmware version check.
+    await connectDevice('usb', { existingSerialPort: candidate, silent: true })
 }
 
 function pickFile(accept = '*/*') {
