@@ -168,6 +168,40 @@ body.api-ref-open #tool-panel #btn-api-ref {
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
 }
 .firmware-update-modal-cancel:hover { background: #dc2626; }
+
+.firmware-update-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+.firmware-update-btn {
+    flex: 1 1 auto;
+    border: none;
+    border-radius: 5px;
+    padding: 7px 12px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12.5px;
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+    transition: background 0.15s ease, transform 0.05s ease;
+    min-width: 0;
+}
+.firmware-update-btn:hover { transform: translateY(-1px); }
+.firmware-update-btn:active { transform: translateY(0); }
+.firmware-update-btn.jumperless {
+    background: linear-gradient(135deg, #6d28d9 0%, #a855f7 100%);
+}
+.firmware-update-btn.jumperless:hover {
+    background: linear-gradient(135deg, #7c3aed 0%, #c084fc 100%);
+}
+.firmware-update-btn.badge {
+    background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%);
+}
+.firmware-update-btn.badge:hover {
+    background: linear-gradient(135deg, #0891b2 0%, #22d3ee 100%);
+}
 /* While a flash is running we hide the close X and surface the Cancel
  * button instead. Backdrop click also no-ops via JS guard. */
 #firmware-update-modal.flashing .firmware-update-modal-close { display: none; }

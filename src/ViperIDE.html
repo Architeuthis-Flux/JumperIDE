@@ -182,16 +182,21 @@
                     <div class="title-lines" id="menu-line-docs">docs</div>
                     <div id="custom-doc-sites-container"></div>
                     <button type="button" id="custom-doc-add" title="Add another documentation site URL to the API Reference picker">Add doc site</button>
-                    <div class="title-lines" id="menu-line-firmware">firmware updates</div>
+                    <div class="title-lines" id="menu-line-firmware-jumperless">jumperless firmware</div>
                     <div class="space-between" title="GitHub releases page for the Jumperless firmware. JumperIDE checks the latest release tag here and offers to flash firmware.uf2.">
-                        <label for="jumperless-firmware-url">Jumperless URL:</label>
+                        <label for="jumperless-firmware-url">Releases URL:</label>
                         <input type="url" id="jumperless-firmware-url" placeholder="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" value="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" style="flex:1; min-width:0;"/>
                     </div>
-                    <div class="space-between" title="GitHub releases page for the Replay Badge firmware. Once releases are published, JumperIDE will fetch firmware.bin from the latest tag.">
-                        <label for="replay-badge-firmware-url">Replay Badge URL:</label>
+                    <div class="firmware-update-actions">
+                        <button type="button" class="firmware-update-btn jumperless" title="Re-poll the Jumperless release feed and toast the latest version" onclick="app.checkFirmwareForKind('jumperless')">Check for updates</button>
+                        <button type="button" class="firmware-update-btn jumperless" title="Open the Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless')">Flash Jumperless…</button>
+                    </div>
+
+                    <div class="title-lines" id="menu-line-firmware-badge">replay badge firmware</div>
+                    <div class="space-between" title="GitHub releases page for the Replay Badge firmware. JumperIDE fetches firmware.bin from the latest tag.">
+                        <label for="replay-badge-firmware-url">Releases URL:</label>
                         <input type="url" id="replay-badge-firmware-url" placeholder="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" value="https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases" style="flex:1; min-width:0;"/>
                     </div>
-                    <div title="Use the locally compiled badge build from .pio/build/echo-dev/ instead of fetching from GitHub. The IDE dev server stages those bins under /dev-firmware/replay-badge/ at startup. Only flashes bootloader, partitions, OTA selector, and app — the FAT filesystem partition (your saved files) is left untouched."><input type="checkbox" id="replay-badge-use-local-build"/><label for="replay-badge-use-local-build" title="Use the locally compiled badge build from .pio/build/echo-dev/">🧪 Replay Badge: flash local dev build</label></div>
                     <div class="space-between" title="Baud rate used while flashing the badge over USB. 115200 is the safe default. Bump it for faster flashes if your USB connection is clean.">
                         <label for="replay-badge-flash-baud">Flash baud:</label>
                         <select id="replay-badge-flash-baud" title="Flash baud rate">
@@ -201,16 +206,10 @@
                             <option value="921600">921600</option>
                         </select>
                     </div>
-                    <div class="space-between" style="margin-top:6px;" title="Re-poll the configured release feed for the currently connected device. The IDE only checks once at connect, so use this after publishing a new release without reconnecting.">
-                        <span style="opacity:0.8;">Check for updates:</span>
-                        <button type="button" id="btn-refresh-firmware-check" title="Re-poll the configured release feed for the connected device" onclick="app.refreshFirmwareCheck()">Check now</button>
-                    </div>
-                    <div class="space-between" style="margin-top:6px;" title="Open the firmware flasher even when the device is up-to-date — handy for re-flashing, recovering a bricked board, or testing a local build.">
-                        <span style="opacity:0.8;">Force flash:</span>
-                        <span>
-                            <button type="button" id="btn-force-flash-jumperless" title="Open the Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless')">Jumperless…</button>
-                            <button type="button" id="btn-force-flash-badge" title="Open the Replay Badge firmware flasher" onclick="app.forceFirmwareUpdate('replay-badge')">Replay Badge…</button>
-                        </span>
+                    <div title="After a successful badge flash, sync /apps, /lib, /docs and the other files from https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/tree/main/firmware/data onto the badge filesystem. Only files that are missing or out of date are uploaded. Off by default because it can be slow over USB-CDC."><input type="checkbox" id="replay-badge-refresh-fs"/><label for="replay-badge-refresh-fs" title="Sync filesystem files (apps, lib, docs) from the badge repo after flashing">🔄 Refresh filesystem after flash</label></div>
+                    <div class="firmware-update-actions">
+                        <button type="button" class="firmware-update-btn badge" title="Re-poll the Replay Badge release feed and toast the latest version" onclick="app.checkFirmwareForKind('replay-badge')">Check for updates</button>
+                        <button type="button" class="firmware-update-btn badge" title="Open the Replay Badge firmware flasher" onclick="app.forceFirmwareUpdate('replay-badge')">Flash Replay Badge…</button>
                     </div>
                 </div>
             </div>

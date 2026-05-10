@@ -27,6 +27,12 @@
 - **Built-in Management Tools**
   - File explorer and editor
   - Package management system
+  - **Sync Filesystem** — for the Temporal Replay 2026 badge, push any
+    missing or stale files from upstream `firmware/data/` over USB
+    without a full reflash. NVS state (badge ID, contacts, game saves
+    via `badge.kv`) is preserved. See `src/badgeSync.js` and
+    `firmware/docs/STORAGE-MODEL.md` in the badge firmware repo.
+    Programmatic entry: `window.runBadgeFilesystemSync()`.
 - ... read more about [features and device support](./docs/Features.md)
 
 ## Links

@@ -25,6 +25,7 @@ import { displayOpenFile, createTab } from './editor_tabs.js'
 import { serial as webSerialPolyfill } from 'web-serial-polyfill'
 import { WebSerial, WebBluetooth, WebSocketREPL, WebRTCTransport } from './transports.js'
 import { MpRawMode } from './rawmode.js'
+import { runSync as badgeRunSync } from './badgeSync.js'
 import { getPkgIndexes, rawInstallPkg } from './package_mgr.js'
 import { ConnectionUID } from './connection_uid.js'
 import translations from './translations.json'
@@ -327,6 +328,10 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
 
                 _updateFileTree(fs_tree, fs_stats);
 
+                // Stash the local file tree so the badge upstream check can
+                // diff against it after the probe completes.
+                devInfo.local_fs_tree = fs_tree
+
                 // Read on-device firmware version while raw mode is open so we can
                 // compare against the latest GitHub release after the probe finishes.
                 try {
@@ -376,6 +381,13 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
         } else if (devInfo) {
             // Don't block the connect flow on the network round-trip; fire and forget.
             checkFirmwareUpdate(devInfo).catch((err) => console.warn('Firmware update check failed', err))
+            // For the badge, also compare the local filesystem against the
+            // upstream firmware/data/ tree on the badge repo and toast if we
+            // see new files. Best-effort; never blocks anything.
+            if (detectDeviceKind(devInfo) === 'replay-badge') {
+                checkBadgeUpstreamForNewFiles(devInfo.local_fs_tree)
+                    .catch((err) => console.warn('Badge upstream FS check failed', err))
+            }
         }
         // Print banner. TODO: optimize
         await port.write('\x02')
@@ -3102,14 +3114,10 @@ export function updateApp() {
 
 const JUMPERLESS_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest'
 const REPLAY_BADGE_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases'
-// Until the Replay Badge release feed is published, bump this when you stage a
-// new dev build; if the badge reports an older version we'll show the banner
-// and let the user flash either a local firmware.bin or the staged dev build.
+// Last-resort fallback for when the badge release feed can't be reached. The
+// real source of truth is the GitHub `releases/latest` API; this only kicks
+// in if the API call fails entirely (offline, rate-limited, etc.).
 const REPLAY_BADGE_LATEST_FALLBACK = '0.1.0'
-// Dev-only: rollup stages bootloader/partitions/boot_app0/firmware.bin under
-// build/dev-firmware/replay-badge/ if the PlatformIO build dir exists at
-// startup. See rollup.config.mjs.
-const REPLAY_BADGE_DEV_FIRMWARE_BASE = './dev-firmware/replay-badge/'
 
 /** Convert a GitHub `releases` or `releases/tag/X` page URL to its API URL. */
 function githubReleasesPageToApi(pageUrl) {
@@ -3135,8 +3143,81 @@ function getJumperlessReleasesPage() {
 function getReplayBadgeReleasesPage() {
     return (getSetting('replay-badge-firmware-url') || '').trim() || REPLAY_BADGE_DEFAULT_RELEASES_PAGE
 }
-function isReplayBadgeUseLocalBuild() {
-    return !!getSetting('replay-badge-use-local-build')
+function isReplayBadgeRefreshFs() {
+    return !!getSetting('replay-badge-refresh-fs')
+}
+
+/* ── Replay Badge filesystem sync (firmware/data on the badge repo) ──── */
+
+const BADGE_REPO_OWNER = 'Architeuthis-Flux'
+const BADGE_REPO_NAME = 'Temporal-Replay-26-Badge'
+const BADGE_REPO_BRANCH = 'main'
+const BADGE_REPO_DATA_PREFIX = 'firmware/data/'
+const BADGE_REPO_TREE_API = `https://api.github.com/repos/${BADGE_REPO_OWNER}/${BADGE_REPO_NAME}/git/trees/${BADGE_REPO_BRANCH}?recursive=1`
+const BADGE_REPO_RAW = (path) => `https://raw.githubusercontent.com/${BADGE_REPO_OWNER}/${BADGE_REPO_NAME}/${BADGE_REPO_BRANCH}/${path}`
+// Don't pull files larger than this when syncing — the WAD weighs ~5 MB and
+// uploading it via raw-mode WriteFile would take many minutes. Anyone who
+// wants doom on the badge can upload it manually.
+const BADGE_FS_SYNC_MAX_BYTES = 1024 * 1024  // 1 MiB
+
+let badgeUpstreamCache = null      // { fetchedAt, files: [{badgePath, size, sha}] }
+const BADGE_UPSTREAM_TTL_MS = 10 * 60 * 1000
+
+/** Fetch the list of files under firmware/data/ from the badge repo. */
+async function fetchBadgeUpstreamFiles({ force = false } = {}) {
+    if (!force && badgeUpstreamCache && (Date.now() - badgeUpstreamCache.fetchedAt) < BADGE_UPSTREAM_TTL_MS) {
+        return badgeUpstreamCache.files
+    }
+    const data = await fetchJSON(BADGE_REPO_TREE_API)
+    if (!data || !Array.isArray(data.tree)) {
+        throw new Error('GitHub returned no tree for the badge repo.')
+    }
+    if (data.truncated) {
+        // Tree API truncates very large repos. Refuse rather than silently
+        // skipping files; user can disable the sync until we add per-dir paging.
+        console.warn('[badge-fs] GitHub tree was truncated; some files may be missing from the sync')
+    }
+    const files = []
+    for (const entry of data.tree) {
+        if (entry.type !== 'blob') continue
+        if (!entry.path.startsWith(BADGE_REPO_DATA_PREFIX)) continue
+        const badgePath = '/' + entry.path.slice(BADGE_REPO_DATA_PREFIX.length)
+        files.push({
+            repoPath: entry.path,
+            badgePath,
+            size: typeof entry.size === 'number' ? entry.size : null,
+            sha: entry.sha,
+        })
+    }
+    badgeUpstreamCache = { fetchedAt: Date.now(), files }
+    return files
+}
+
+/** Flatten the rawmode walkFs() tree into a Map<path, size>. */
+function flattenLocalFs(tree) {
+    const out = new Map()
+    function walk(nodes) {
+        for (const n of nodes) {
+            if (Array.isArray(n.content)) walk(n.content)
+            else out.set(n.path, n.size || 0)
+        }
+    }
+    walk(tree || [])
+    return out
+}
+
+/** What's missing or wrong-size on the badge vs upstream? */
+function diffBadgeFs(localFlat, upstreamFiles) {
+    const missing = []
+    const sizeChanged = []
+    for (const f of upstreamFiles) {
+        if (!localFlat.has(f.badgePath)) {
+            missing.push(f)
+        } else if (f.size != null && localFlat.get(f.badgePath) !== f.size) {
+            sizeChanged.push(f)
+        }
+    }
+    return { missing, sizeChanged, total: upstreamFiles.length, local: localFlat.size }
 }
 
 const FIRMWARE_BANNER_DISMISS_KEY = 'firmware-update-banner-dismissed'
@@ -3417,6 +3498,55 @@ export async function refreshFirmwareCheck() {
 }
 
 /**
+ * Settings-side "Check for updates" — works whether or not a device is
+ * connected. Just polls the configured release feed and tells the user the
+ * latest version. If a device of the matching kind is connected, also
+ * compares against installed and may re-show the banner.
+ */
+export async function checkFirmwareForKind(kind) {
+    const label = kind === 'jumperless' ? 'Jumperless' : 'Replay Badge'
+    let latest
+    try {
+        latest = kind === 'jumperless'
+            ? await fetchLatestJumperlessRelease()
+            : await fetchLatestReplayBadgeRelease()
+    } catch (err) {
+        toastr.error(`Couldn't reach the ${label} release feed: ${err.message || err}`)
+        return
+    }
+    if (!latest || !latest.version) {
+        toastr.warning(`No ${label} release found at the configured URL.`)
+        return
+    }
+
+    // If a matching device is connected, run the full check so the banner
+    // and modal cache stay in sync.
+    if (devInfo && detectDeviceKind(devInfo) === kind) {
+        try { localStorage.removeItem(FIRMWARE_BANNER_DISMISS_KEY) } catch (_) {}
+        pendingFirmwareUpdate = null
+        hideFirmwareUpdateBanner()
+        await checkFirmwareUpdate(devInfo)
+        const installed = devInfo.firmware_version || 'unknown'
+        if (pendingFirmwareUpdate) {
+            // Banner already shown by checkFirmwareUpdate; add a confirmatory toast.
+            toastr.info(`${label} update available: ${installed} → ${latest.version}`)
+        } else {
+            toastr.success(`${label} firmware is up to date (${installed} = ${latest.version}).`)
+        }
+        return
+    }
+
+    // No matching device → just tell the user what the latest is.
+    const releaseLink = `<a href="${sanitizeHTML(latest.releaseUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">${sanitizeHTML(latest.version)}</a>`
+    toastr.info(
+        `Latest ${sanitizeHTML(label)}: <strong>${releaseLink}</strong><br>` +
+        `<small>Connect a ${sanitizeHTML(label)} to compare against its installed version.</small>`,
+        '',
+        { escapeHtml: false, timeOut: 5000 }
+    )
+}
+
+/**
  * Open the firmware modal even when no version mismatch was detected — handy
  * for re-flashing the same version, recovering a bricked board, or flashing a
  * local dev build. Caller picks the device kind explicitly; if omitted we
@@ -3532,6 +3662,74 @@ export function cancelFirmwareFlash() {
     if (!firmwareFlashInProgress || !firmwareFlashAbort) return
     fwLog('Cancel requested — aborting flash…')
     try { firmwareFlashAbort.abort() } catch (_) {}
+}
+
+/**
+ * Sync the connected Temporal Replay 26 badge's filesystem against the
+ * upstream `firmware/data/manifest.json`. Pushes anything missing or
+ * stale; preserves user uploads (extras) by default.
+ *
+ * Caller (button onClick / settings panel) should invoke this when the
+ * user explicitly opts in. The function is destructive on FATFS only —
+ * NVS state (badge ID, contacts, badgeInfo, badge.kv saves) is never
+ * touched. See firmware/docs/STORAGE-MODEL.md in the badge repo for
+ * the full survival matrix.
+ *
+ * Returns the SyncResult from badgeSync.runSync. On success
+ * `result.ok === true` and `result.pushed` lists the paths written.
+ */
+export async function runBadgeFilesystemSync({ clearExtras = false } = {}) {
+    const port = window.port
+    if (!port) {
+        toastr.warning('Connect to a badge first.', 'Sync Filesystem')
+        return null
+    }
+    const confirmText = clearExtras
+        ? 'This will delete files on the badge that are not in the upstream manifest, and push any missing/stale files. User-uploaded apps WILL be removed. NVS state (game saves, badge info) is not affected.\n\nContinue?'
+        : 'This will push any missing or stale files to the badge from upstream firmware/data/. User-uploaded files are preserved. NVS state (game saves, badge info) is not affected.\n\nContinue?'
+    if (!window.confirm(confirmText)) return null
+    toastr.info('Reading badge filesystem…', 'Sync Filesystem',
+        { timeOut: 2500 })
+    let raw
+    try {
+        raw = await MpRawMode.begin(port)
+    } catch (err) {
+        toastr.error(`Could not enter raw REPL: ${err.message || err}`,
+            'Sync Filesystem')
+        return null
+    }
+    try {
+        const result = await badgeRunSync(raw, {
+            clearExtras,
+            onProgress: (path, n) => {
+                console.log(`badge_sync: pushed ${path} (${n} B)`)
+            },
+        })
+        if (result.ok) {
+            toastr.success(
+                `Pushed ${result.pushed.length}, cleared ${result.cleared.length}, ${result.skipped.length} unchanged.`,
+                'Sync Filesystem',
+                { timeOut: 5000 })
+        } else {
+            toastr.error(
+                `Sync finished with ${result.errors.length} error(s). See console.`,
+                'Sync Filesystem')
+            for (const e of result.errors) console.error('badge_sync:', e)
+        }
+        return result
+    } catch (err) {
+        toastr.error(`Sync failed: ${err.message || err}`, 'Sync Filesystem')
+        return null
+    } finally {
+        try { await raw.end() } catch (_) { /* ignore */ }
+    }
+}
+
+// Make available to `onclick="runBadgeFilesystemSync()"` markup so a
+// "Sync Filesystem" button can be added to the firmware update modal
+// (or anywhere else) without re-importing this module from inline JS.
+if (typeof window !== 'undefined') {
+    window.runBadgeFilesystemSync = runBadgeFilesystemSync
 }
 
 function setFirmwareFlashInProgress(on) {
@@ -3685,60 +3883,29 @@ const REPLAY_BADGE_DEFAULT_OFFSETS = {
 }
 
 function renderBadgeModal(update, instructions, actions) {
-    const useLocalBuild = isReplayBadgeUseLocalBuild()
-    const releaseFeedLive = !update.usingFallback && Array.isArray(update.assets) && update.assets.some(a => /\.bin$/i.test(a.name))
+    const releaseFeedLive = Array.isArray(update.assets) && update.assets.some(a => /\.bin$/i.test(a.name))
+    const refreshFs = isReplayBadgeRefreshFs()
 
-    let instructionsHtml = ''
-    if (useLocalBuild) {
-        instructionsHtml = `
-            <p>JumperIDE will flash the staged local dev build via <code>esptool-js</code>:</p>
-            <ul>
-                <li><code>0x0000</code> bootloader.bin</li>
-                <li><code>0x8000</code> partitions.bin</li>
-                <li><code>0xE000</code> boot_app0.bin (OTA selector)</li>
-                <li><code>0x10000</code> firmware.bin (app)</li>
-            </ul>
-            <p>The <code>ffat</code> filesystem partition is <strong>not</strong> erased — your saved files stay put.</p>
-            <p>Most ESP32-S3 boards reset into download mode automatically. If yours doesn't, hold <strong>BOOT</strong>, tap <strong>RST</strong>, release <strong>BOOT</strong>, then click <strong>Flash dev build</strong>.</p>
-        `
-    } else if (releaseFeedLive) {
-        instructionsHtml = `
+    const fsNote = refreshFs
+        ? `<p style="margin-top:8px;"><strong>🔄 Refresh filesystem:</strong> after flashing, JumperIDE will sync apps/libs/docs from the badge repo over the REPL.</p>`
+        : ''
+
+    if (releaseFeedLive) {
+        instructions.innerHTML = `
             <p>The badge flashes over USB serial. JumperIDE will fetch <code>firmware.bin</code> from the latest release and write it via <code>esptool-js</code>.</p>
             <ol>
                 <li>If your board doesn't auto-enter download mode: hold <strong>BOOT</strong>, tap <strong>RST</strong>, release <strong>BOOT</strong>.</li>
                 <li>Click <strong>Flash badge</strong>, then pick the badge serial port.</li>
-            </ol>
-        `
+            </ol>${fsNote}`
     } else {
-        instructionsHtml = `
-            <p>No public Replay Badge release found at <a href="${sanitizeHTML(update.releaseUrl)}" target="_blank" rel="noopener">${sanitizeHTML(update.releaseUrl)}</a> yet.</p>
-            <p>You can either:</p>
-            <ul>
-                <li>Enable <em>Replay Badge: flash local dev build</em> in Settings to use the staged PlatformIO build, or</li>
-                <li>Click <strong>Choose firmware.bin…</strong> to pick a single app image manually.</li>
-            </ul>
-        `
+        instructions.innerHTML = `
+            <p>No <code>firmware.bin</code> asset found at <a href="${sanitizeHTML(update.releaseUrl)}" target="_blank" rel="noopener">${sanitizeHTML(update.releaseUrl)}</a> yet.</p>
+            <p>Click <strong>Choose firmware.bin…</strong> to pick an app image manually.</p>`
     }
-    instructions.innerHTML = instructionsHtml
 
     actions.innerHTML = ''
 
-    if (useLocalBuild) {
-        const btnLocal = document.createElement('button')
-        btnLocal.className = 'fw-btn'
-        btnLocal.textContent = 'Flash dev build'
-        btnLocal.onclick = async () => {
-            btnLocal.disabled = true
-            try {
-                // Grab the SerialPort *before* any awaits so we still have a
-                // user gesture for navigator.serial.requestPort().
-                const sp = await acquireBadgeSerialPort()
-                await flashBadgeFromLocalDevBuild(sp)
-            } catch (err) { fwLog('ERROR: ' + (err.message || err)) }
-            finally { btnLocal.disabled = false }
-        }
-        actions.appendChild(btnLocal)
-    } else if (releaseFeedLive) {
+    if (releaseFeedLive) {
         const btnFlash = document.createElement('button')
         btnFlash.className = 'fw-btn'
         btnFlash.textContent = 'Flash badge'
@@ -3832,52 +3999,6 @@ async function acquireBadgeSerialPort() {
         }
         throw err
     }
-}
-
-async function flashBadgeFromLocalDevBuild(serialPort = null) {
-    fwLog('Loading staged dev build manifest…')
-    let manifest
-    try {
-        manifest = await fetchJSON(REPLAY_BADGE_DEV_FIRMWARE_BASE + 'manifest.json')
-    } catch (_err) {
-        throw new Error(`Local dev build not staged at ${REPLAY_BADGE_DEV_FIRMWARE_BASE}. ` +
-            `Run \`npm run start\` from JumperIDE with the badge .pio/build/echo-dev directory present, ` +
-            `or set REPLAY_BADGE_DEV_BUILD_DIR before building.`)
-    }
-    if (!manifest || !Array.isArray(manifest.files) || !manifest.files.length) {
-        throw new Error('Dev build manifest is empty.')
-    }
-    fwLog(`Source: ${manifest.source}`)
-
-    // Sanity check: the badge build is ~2-3 MB. If the manifest is missing
-    // bootloader/partitions/app, we'd be doing a partial flash that bricks
-    // the device. Refuse and tell the user what's wrong.
-    const expected = ['bootloader.bin', 'partitions.bin', 'boot_app0.bin', 'firmware.bin']
-    const present = manifest.files.map(f => f.name)
-    const missing = (Array.isArray(manifest.missing) && manifest.missing.length)
-        ? manifest.missing.map(m => m.name)
-        : expected.filter(n => !present.includes(n))
-    if (missing.length) {
-        const missingDetail = missing.map(n => {
-            const m = (manifest.missing || []).find(x => x.name === n)
-            return m && m.src ? `${n} (${m.src})` : n
-        }).join(', ')
-        throw new Error(
-            `Dev build is incomplete — missing: ${missingDetail}.\n` +
-            `PlatformIO is probably still building. Wait for "pio run" to finish, ` +
-            `then save any source file in JumperIDE (or restart \`npm run start\`) ` +
-            `to re-stage the manifest, and try again.`
-        )
-    }
-
-    const images = []
-    for (const f of manifest.files) {
-        const url = REPLAY_BADGE_DEV_FIRMWARE_BASE + f.name
-        fwLog(`Fetching ${f.name} (${(f.size || 0).toLocaleString()} B) → 0x${f.address.toString(16).padStart(6, '0')}`)
-        const data = await readFirmwareSource({ url, onLog: (m) => fwLog(m) })
-        images.push({ name: f.name, address: f.address, data })
-    }
-    await flashBadgeWithImages(images, serialPort)
 }
 
 async function flashBadgeFromReleaseAssets(update, serialPort = null) {
@@ -4055,6 +4176,97 @@ async function reconnectAfterBadgeFlash(usbProductId) {
     // the OS picker. connectDevice() will probe the device, refresh the file
     // tree, and re-run the firmware version check.
     await connectDevice('usb', { existingSerialPort: candidate, silent: true })
+
+    // If the user opted in, sync /apps, /lib, /docs from the badge repo over
+    // the freshly-rebooted REPL so the new firmware has the matching app set.
+    if (isReplayBadgeRefreshFs() && port) {
+        try { await refreshBadgeFilesystem({ silent: false }) }
+        catch (err) { toastr.error('Filesystem sync failed: ' + (err.message || err)) }
+    }
+}
+
+/**
+ * Walk the badge repo's firmware/data/ tree and upload any files missing or
+ * size-mismatched on the connected badge. Skips the multi-MB doom WAD by
+ * default (configurable via BADGE_FS_SYNC_MAX_BYTES).
+ */
+async function refreshBadgeFilesystem({ silent = false } = {}) {
+    if (!port) throw new Error('Connect a badge first.')
+    const upstream = await fetchBadgeUpstreamFiles({ force: true })
+    const localTree = await _withRawRetry('Reading badge filesystem', async (raw) => raw.walkFs())
+    const localFlat = flattenLocalFs(localTree)
+    const { missing, sizeChanged } = diffBadgeFs(localFlat, upstream)
+    const todo = [...missing, ...sizeChanged].filter(f =>
+        f.size == null || f.size <= BADGE_FS_SYNC_MAX_BYTES
+    )
+    const skipped = [...missing, ...sizeChanged].length - todo.length
+    if (!todo.length) {
+        if (!silent) toastr.info('Badge filesystem is already up to date.')
+        return { uploaded: 0, skipped }
+    }
+    if (!silent) toastr.info(`Syncing ${todo.length} file${todo.length === 1 ? '' : 's'} from the badge repo…`)
+
+    let uploaded = 0
+    await _withRawRetry('Syncing badge filesystem', async (raw) => {
+        for (const f of todo) {
+            const url = BADGE_REPO_RAW(f.repoPath)
+            const data = await readFirmwareSource({ url, onLog: (m) => console.log('[badge-fs]', m) })
+            // Make sure the parent directory exists. raw.makePath is a no-op
+            // if it already does.
+            const parent = f.badgePath.replace(/\/[^/]+$/, '')
+            if (parent && parent !== '') { try { await raw.makePath(parent) } catch (_) {} }
+            await raw.writeFile(f.badgePath, data)
+            uploaded += 1
+        }
+    })
+
+    if (!silent) {
+        const tail = skipped ? ` (${skipped} large file${skipped === 1 ? '' : 's'} skipped — over ${(BADGE_FS_SYNC_MAX_BYTES / 1024 / 1024).toFixed(0)} MB)` : ''
+        toastr.success(`Synced ${uploaded} file${uploaded === 1 ? '' : 's'} from the badge repo.${tail}`, 'Filesystem updated')
+    }
+    // Refresh the IDE file tree so the new files show up immediately.
+    try { await refreshFileTree() } catch (_) {}
+    return { uploaded, skipped }
+}
+
+export { refreshBadgeFilesystem }
+
+/**
+ * Compare the badge's current filesystem against firmware/data/ in the badge
+ * repo. If upstream has files we don't have locally, surface a sticky toast
+ * the user can click to start refreshBadgeFilesystem(). Quiet if everything
+ * matches or the network is unreachable.
+ */
+async function checkBadgeUpstreamForNewFiles(localTree) {
+    let upstream
+    try { upstream = await fetchBadgeUpstreamFiles() }
+    catch (err) { console.warn('[badge-fs] upstream fetch failed:', err); return }
+    const localFlat = flattenLocalFs(localTree || [])
+    const { missing } = diffBadgeFs(localFlat, upstream)
+    const flashableMissing = missing.filter(f => f.size == null || f.size <= BADGE_FS_SYNC_MAX_BYTES)
+    if (!flashableMissing.length) return
+
+    const sample = flashableMissing.slice(0, 4).map(f => f.badgePath).join(', ')
+    const more = flashableMissing.length > 4 ? `, +${flashableMissing.length - 4} more` : ''
+    const html = `<strong>${flashableMissing.length} new file${flashableMissing.length === 1 ? '' : 's'}</strong> ` +
+        `available on the badge repo (${sanitizeHTML(sample)}${sanitizeHTML(more)}).<br>` +
+        `<button class="fw-toast-yes" style="margin-top:6px;">Refresh filesystem</button>`
+    const $toast = toastr.info(html, 'Badge filesystem update', {
+        timeOut: 0,
+        extendedTimeOut: 0,
+        closeButton: true,
+        tapToDismiss: false,
+        escapeHtml: false,
+    })
+    if ($toast && $toast.length) {
+        $toast.find('.fw-toast-yes').on('click', (e) => {
+            e.stopPropagation()
+            toastr.clear($toast)
+            refreshBadgeFilesystem({ silent: false }).catch(err =>
+                toastr.error('Filesystem sync failed: ' + (err.message || err))
+            )
+        })
+    }
 }
 
 function pickFile(accept = '*/*') {
