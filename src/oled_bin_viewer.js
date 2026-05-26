@@ -235,6 +235,43 @@ export function bitmapToSsd1306Framebuffer(bitmap, width, height) {
 }
 
 /**
+ * Rotate an SSD1306 page-major framebuffer 180° in place of an extra logical
+ * pass. Use this to un-apply the U8G2_R2 flip that `bitmapToSsd1306Framebuffer`
+ * / `rowMajorToSsd1306` bake in: the Replay Badge needs the flip (display is
+ * physically upside down, controller is U8G2_R2), but the Jumperless OLED is
+ * mounted right-side up and `oled_set_framebuffer` paints bytes verbatim, so
+ * the flip arrives on-screen as an upside-down image. Rotating once more here
+ * cancels it. Always assumes width = 128 (the only OLED width used by either
+ * device); height is inferred from the byte length when omitted.
+ * @param {Uint8Array} fb
+ * @param {number} [width=128]
+ * @param {number|null} [height=null]
+ * @returns {Uint8Array}
+ */
+export function rotateSsd1306180(fb, width = 128, height = null) {
+    if (height == null) {
+        if (fb.length === 1024) height = 64
+        else if (fb.length === 512) height = 32
+        else return new Uint8Array(fb)
+    }
+    const out = new Uint8Array(fb.length)
+    for (let y = 0; y < height; y++) {
+        const srcPage = y >> 3
+        const srcBit = y & 7
+        const dstY = height - 1 - y
+        const dstPage = dstY >> 3
+        const dstBit = dstY & 7
+        for (let x = 0; x < width; x++) {
+            const dstX = width - 1 - x
+            if ((fb[srcPage * width + x] >> srcBit) & 1) {
+                out[dstPage * width + dstX] |= 1 << dstBit
+            }
+        }
+    }
+    return out
+}
+
+/**
  * Convert a .bin file (row-major MSB-first, with or without 4-byte header)
  * to a .fb file (SSD1306 page-major framebuffer with U8G2_R2 180° flip).
  * @param {Uint8Array} binBytes - full .bin file bytes
@@ -405,6 +442,70 @@ export function oledBinViewer(bytes, fn, targetElement, options = {}) {
         renderCanvas()
     })
     toolbar.appendChild(invertBtn)
+
+    function currentBaseName() {
+        const name = (typeof animCurrentName === 'string' && animCurrentName)
+            ? animCurrentName
+            : (fn || '').split('/').pop()
+        const dot = name.lastIndexOf('.')
+        return dot > 0 ? name.slice(0, dot) : (name || 'oled')
+    }
+    function triggerBlobDownload(blob, fileName) {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = fileName
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        // Revoke on next tick so the browser has a chance to start the
+        // download before we release the blob URL.
+        setTimeout(() => URL.revokeObjectURL(url), 0)
+    }
+    const downloadBinBtn = document.createElement('button')
+    downloadBinBtn.type = 'button'
+    const nativeExt = isFb ? 'fb' : 'bin'
+    downloadBinBtn.textContent = `Download .${nativeExt}`
+    downloadBinBtn.title = `Save current frame as a .${nativeExt} file`
+    downloadBinBtn.classList.add('oled-bin-download')
+    downloadBinBtn.addEventListener('click', () => {
+        const bytes = isFb
+            ? rowMajorToSsd1306(bitmapCopy, width, height)
+            : buildOledBin(width, height, bitmapCopy, hasHeader)
+        const blob = new Blob([bytes], { type: 'application/octet-stream' })
+        triggerBlobDownload(blob, `${currentBaseName()}.${nativeExt}`)
+    })
+    toolbar.appendChild(downloadBinBtn)
+
+    const downloadPngBtn = document.createElement('button')
+    downloadPngBtn.type = 'button'
+    downloadPngBtn.textContent = 'Download .png'
+    downloadPngBtn.title = `Save current frame as a ${width}×${height} 1-bit PNG (reflects file content, not the Invert preview)`
+    downloadPngBtn.classList.add('oled-bin-download-png')
+    downloadPngBtn.addEventListener('click', () => {
+        // Render the *file* contents (no inverted preview) at native resolution
+        // so re-importing the PNG round-trips losslessly.
+        const exportCanvas = document.createElement('canvas')
+        exportCanvas.width = width
+        exportCanvas.height = height
+        const ectx = exportCanvas.getContext('2d')
+        const imgData = ectx.createImageData(width, height)
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const v = getPixel(bitmapCopy, width, height, x, y)
+                const c = v ? 255 : 0
+                const i = (y * width + x) * 4
+                imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = c
+                imgData.data[i + 3] = 255
+            }
+        }
+        ectx.putImageData(imgData, 0, 0)
+        exportCanvas.toBlob((blob) => {
+            if (!blob) return
+            triggerBlobDownload(blob, `${currentBaseName()}.png`)
+        }, 'image/png')
+    })
+    toolbar.appendChild(downloadPngBtn)
     if (options.onImportPng) {
         const importPngBtn = document.createElement('button')
         importPngBtn.type = 'button'

@@ -41,7 +41,7 @@ import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
-import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, binToFb, fbToBin } from './oled_bin_viewer.js'
+import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, binToFb, fbToBin, rotateSsd1306180 } from './oled_bin_viewer.js'
 import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
@@ -381,13 +381,18 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
         } else if (devInfo) {
             // Don't block the connect flow on the network round-trip; fire and forget.
             checkFirmwareUpdate(devInfo).catch((err) => console.warn('Firmware update check failed', err))
+            const deviceKind = detectDeviceKind(devInfo)
             // For the badge, also compare the local filesystem against the
             // upstream firmware/data/ tree on the badge repo and toast if we
             // see new files. Best-effort; never blocks anything.
-            if (detectDeviceKind(devInfo) === 'replay-badge') {
+            if (deviceKind === 'replay-badge') {
                 checkBadgeUpstreamForNewFiles(devInfo.local_fs_tree)
                     .catch((err) => console.warn('Badge upstream FS check failed', err))
             }
+            // Auto-switch the API ref iframe to the docs that match this
+            // device (Jumperless API ↔ Badge API). No-ops when the user is
+            // reading MicroPython or a custom site so we don't trample them.
+            try { autoSwitchApiRefForDevice(deviceKind) } catch (err) { console.warn('API ref auto-switch failed', err) }
         }
         // Print banner. TODO: optimize
         await port.write('\x02')
@@ -744,11 +749,20 @@ async function execReplNoFollow(cmd) {
 /**
  * Send OLED framebuffer (512 or 1024 bytes, SSD1306 format) to device via REPL.
  * Uses binascii.a2b_base64 so the REPL line stays short. Calls oled_show() to refresh display.
+ *
+ * The OLED editor and image2oled both bake in a U8G2_R2 180° flip when
+ * rasterizing to SSD1306 page-major — that's correct for the Replay Badge,
+ * whose display is physically upside down (the controller rotates it back).
+ * The Jumperless OLED is mounted right-side up and `oled_set_framebuffer`
+ * writes bytes verbatim, so we must un-rotate before sending to it.
  */
 async function sendOledFramebufferToDevice(fb) {
     if (!port || !fb) return
     try {
-        const b64 = btoa(String.fromCharCode.apply(null, fb))
+        const payload = detectDeviceKind(devInfo) === 'jumperless'
+            ? rotateSsd1306180(fb)
+            : fb
+        const b64 = btoa(String.fromCharCode.apply(null, payload))
         const cmd = `import binascii;oled_set_framebuffer(binascii.a2b_base64('${b64}'));oled_show()`
         await execReplNoFollow(cmd)
     } catch (err) {
@@ -2021,6 +2035,58 @@ const API_REF_OUR_DOCS_ORIGIN = 'https://docs.jumperless.org'
 const API_REF_MICROPYTHON_ORIGIN = 'https://docs.micropython.org'
 const API_REF_MICROPYTHON_LIBRARY_PATH = '/en/latest/library/'
 const API_REF_BADGE_DOC_PATH = '/badge-api-reference/'
+const API_REF_JUMPERLESS_API_PATH = '/09.5-micropythonAPIreference'
+
+/**
+ * Find first non-badge docs.jumperless.org site (the Jumperless API ref page).
+ * Falls back to the first jumperless.org entry if no purely non-badge one exists.
+ */
+function getJumperlessApiDocSiteIndex() {
+    const sites = getCustomDocSites()
+    let fallback = -1
+    for (let i = 0; i < sites.length; i++) {
+        const u = sites[i]?.url || ''
+        if (!u.includes(API_REF_OUR_DOCS_ORIGIN)) continue
+        if (u.includes(API_REF_BADGE_DOC_PATH)) continue
+        if (u.includes(API_REF_JUMPERLESS_API_PATH)) return i
+        if (fallback < 0) fallback = i
+    }
+    return fallback
+}
+
+/**
+ * If the currently selected docs site is one of the device-specific Jumperless
+ * docs (Jumperless API or Badge API), swap it to match the connected device.
+ * Leaves the user's selection alone when they're on MicroPython docs or a
+ * custom site — we don't want to clobber an explicit, unrelated choice.
+ */
+function autoSwitchApiRefForDevice(kind) {
+    if (kind !== 'jumperless' && kind !== 'replay-badge') return
+    const sites = getCustomDocSites()
+    if (!sites.length) return
+    const currentIdx = getSelectedDocIndex()
+    const currentUrl = sites[currentIdx]?.url || ''
+    const onBadgeDocs = currentUrl.includes(API_REF_BADGE_DOC_PATH)
+    const onJumperlessDocs = currentUrl.includes(API_REF_OUR_DOCS_ORIGIN) && !onBadgeDocs
+    if (!onBadgeDocs && !onJumperlessDocs) return
+
+    const targetIdx = kind === 'jumperless'
+        ? getJumperlessApiDocSiteIndex()
+        : getDocSiteIndexByUrl(API_REF_BADGE_DOC_PATH)
+    if (targetIdx < 0 || targetIdx === currentIdx) return
+
+    setSelectedDocIndex(targetIdx)
+    refreshApiRefDocPicker()
+    const iframe = QID('api-ref-iframe')
+    if (!iframe) return
+    const panel = QID('api-ref-panel')
+    const panelOpen = panel && !panel.classList.contains('collapsed')
+    // Only swap the live iframe if the panel is actually visible (or already
+    // loaded once); otherwise let toggleApiRefPanel() lazily load it on open.
+    if (panelOpen || (iframe.src && iframe.src !== 'about:blank')) {
+        setApiRefIframeSrc(iframe, getCurrentDocUrl())
+    }
+}
 
 /** Resolve editor word to MicroPython docs URL when base is docs.micropython.org. Returns { pageUrl, anchor, confident }. */
 function wordToMicroPythonDocUrl(word, base) {
@@ -3117,7 +3183,7 @@ const REPLAY_BADGE_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux
 // Last-resort fallback for when the badge release feed can't be reached. The
 // real source of truth is the GitHub `releases/latest` API; this only kicks
 // in if the API call fails entirely (offline, rate-limited, etc.).
-const REPLAY_BADGE_LATEST_FALLBACK = '0.1.0'
+const REPLAY_BADGE_LATEST_FALLBACK = '0.2.7'
 
 /** Convert a GitHub `releases` or `releases/tag/X` page URL to its API URL. */
 function githubReleasesPageToApi(pageUrl) {
