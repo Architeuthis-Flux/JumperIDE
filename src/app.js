@@ -3317,8 +3317,22 @@ function detectDeviceKind(devInfo) {
 async function _raw_readDeviceFirmwareVersion(raw, devInfo) {
     const kind = detectDeviceKind(devInfo)
     if (kind === 'jumperless') {
-        // /config.txt lives on the LittleFS partition exposed by Jumperless's
-        // MicroPython port and contains a `firmware_version = X.Y.Z.W;` line.
+        // Newer firmware embeds the version in MICROPY_BANNER_MACHINE (see
+        // JumperlOS lib/micropython/micropython_embed/mpconfigport.h), exposed at
+        // runtime as sys.implementation._machine — the REPL banner greeting reads
+        // `jumperless-v5 v5.7.0.2 with rp2350b`. os.uname().machine on this port
+        // omits the version (built from MICROPY_HW_BOARD_NAME alone), so read
+        // _machine directly and parse the leading v<X.Y.Z.W>.
+        try {
+            const rsp = await raw.exec(
+                `import sys\nprint(getattr(sys.implementation, '_machine', ''))\n`
+            )
+            const m = (rsp || '').match(/v(\d+(?:\.\d+){1,3})/i)
+            if (m) return m[1]
+        } catch (_err) { /* fall through to /config.txt */ }
+        // Fallback for older firmware that doesn't embed the version in the
+        // banner: /config.txt on the LittleFS partition exposed by Jumperless's
+        // MicroPython port contains a `firmware_version = X.Y.Z.W;` line.
         try {
             const buf = await raw.readFile('/config.txt')
             const text = new TextDecoder().decode(buf)
