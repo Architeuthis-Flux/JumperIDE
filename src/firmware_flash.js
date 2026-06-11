@@ -403,11 +403,23 @@ function friendlyFlashError(err) {
  * `proxyUrl` in firmware ops), and we'll try it ahead of the public list.
  */
 const CORS_PROXIES = [
+    // gh-proxy.com mirrors GitHub server-side and serves the bytes with
+    // ACAO:* — as of 2026-06 it's the only public proxy that reliably
+    // handles multi-MB release assets. GitHub URLs only.
+    (url) => isGithubHostedUrl(url) ? `https://gh-proxy.com/${url}` : null,
+    // allorigins 520s on large binaries fairly often but is fine for small
+    // files; codetabs rejects /releases/download/ URLs with a 400 but works
+    // for other hosts. Both kept as generic fallbacks.
+    // (corsproxy.io now requires an API key → always 403, and
+    // thingproxy.freeboard.io's DNS is gone — both removed.)
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
-    (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-    (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ]
+
+function isGithubHostedUrl(url) {
+    try { return /(?:^|\.)github(?:usercontent)?\.com$/i.test(new URL(url).hostname) }
+    catch { return false }
+}
 
 function buildProxyChain() {
     const chain = []
@@ -428,19 +440,53 @@ function buildProxyChain() {
  * a round-trip on a fetch we know will fail.
  */
 const CORS_BROKEN_HOSTS = /(?:^|\.)(?:github\.com|githubusercontent\.com)$/i
+// …but these GitHub hosts DO send Access-Control-Allow-Origin: * and can be
+// fetched directly (verified 2026-06). release-assets.githubusercontent.com
+// (where release-asset redirects land) does not, which is why plain
+// github.com/…/releases/download/ URLs stay on the proxy path.
+const CORS_OK_GITHUB_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com'])
 
 function hostIsCorsBroken(url) {
-    try { return CORS_BROKEN_HOSTS.test(new URL(url).hostname) }
-    catch { return false }
+    try {
+        const host = new URL(url).hostname.toLowerCase()
+        if (CORS_OK_GITHUB_HOSTS.has(host)) return false
+        return CORS_BROKEN_HOSTS.test(host)
+    } catch { return false }
+}
+
+/**
+ * CORS-friendly mirrors for a GitHub release-asset download URL.
+ *
+ * Release-asset downloads (github.com/…/releases/download/…) never send
+ * CORS headers, but raw.githubusercontent.com and <owner>.github.io do.
+ * Repos that mirror their release binaries — e.g. via a CI step publishing
+ * artifacts to a `firmware-mirror` branch (or GitHub Pages) under
+ * releases/<tag>/<file> — get proxy-free in-browser downloads. Repos that
+ * don't simply 404 here and fall through to the normal direct/proxy path.
+ */
+function githubReleaseMirrorCandidates(downloadUrl) {
+    try {
+        const u = new URL(downloadUrl)
+        if (!/(?:^|\.)github\.com$/i.test(u.hostname)) return []
+        const m = u.pathname.match(/^\/([^/]+)\/([^/]+)\/releases\/download\/([^/]+)\/(.+)$/)
+        if (!m) return []
+        const [, owner, repo, tag, file] = m
+        return [
+            `https://raw.githubusercontent.com/${owner}/${repo}/firmware-mirror/releases/${tag}/${file}`,
+            `https://${owner.toLowerCase()}.github.io/${repo}/releases/${tag}/${file}`,
+        ]
+    } catch { return [] }
 }
 
 /**
  * Read a Uint8Array from a File or a fetched URL.
  *
- * Tries the URL directly first (unless we already know the host doesn't set
- * CORS for binary downloads). If that fails it walks the CORS proxy list and
- * uses whichever one responds. Pass an explicit `accept` header for endpoints
- * that need it (e.g. GitHub API asset URLs).
+ * For GitHub release-asset URLs, CORS-friendly repo mirrors are tried first
+ * (see githubReleaseMirrorCandidates). Then the URL itself directly (unless
+ * we already know the host doesn't set CORS for binary downloads), and
+ * finally the CORS proxy list — first one that responds wins. Pass an
+ * explicit `accept` header for endpoints that need it (e.g. GitHub API
+ * asset URLs).
  */
 export async function readFirmwareSource({ file, url, accept, onLog }) {
     if (file) {
@@ -451,6 +497,18 @@ export async function readFirmwareSource({ file, url, accept, onLog }) {
     const log = (m) => { try { onLog && onLog(m) } catch (_) {} }
     const headers = {}
     if (accept) headers['Accept'] = accept
+
+    for (const mirror of githubReleaseMirrorCandidates(url)) {
+        try {
+            const resp = await fetch(mirror, { mode: 'cors' })
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+            const buf = new Uint8Array(await resp.arrayBuffer())
+            log(`Fetched via CORS mirror ${new URL(mirror).host}.`)
+            return buf
+        } catch (_err) {
+            // Expected for repos without a mirror — stay quiet and move on.
+        }
+    }
 
     let directErr = null
     if (hostIsCorsBroken(url)) {
@@ -468,6 +526,7 @@ export async function readFirmwareSource({ file, url, accept, onLog }) {
 
     for (const buildProxyUrl of buildProxyChain()) {
         const proxied = buildProxyUrl(url)
+        if (!proxied) continue  // proxy doesn't handle this host
         try {
             // Don't forward the Accept header through the proxy — those
             // services return the body straight up regardless and a custom
@@ -482,5 +541,8 @@ export async function readFirmwareSource({ file, url, accept, onLog }) {
         }
     }
 
-    throw directErr || new Error('Could not fetch firmware (all proxies failed).')
+    throw directErr || new Error(
+        'Could not fetch firmware (all proxies failed). ' +
+        'Download the .bin from the release page and use "Choose firmware.bin…" instead.'
+    )
 }
