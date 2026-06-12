@@ -327,6 +327,406 @@ async function triggerEsp32S3WatchdogReset(loader, log) {
     }
 }
 
+/* ── Jumperless (RP2350B) — in-browser UF2 flash via PICOBOOT/WebUSB ────── */
+/*
+ * When an RP2040/RP2350 is in BOOTSEL mode it exposes, alongside the USB
+ * mass-storage drive, a vendor-specific "PICOBOOT" interface — the same one
+ * picotool talks to. WebUSB can claim that interface (the MSC interface
+ * stays with the OS), which lets us erase/write flash and reboot the chip
+ * entirely from the browser. Protocol reference: RP2350 datasheet §5.6,
+ * pico-sdk boot/picoboot.h.
+ */
+
+const UF2_MAGIC_START0 = 0x0A324655   // "UF2\n"
+const UF2_MAGIC_START1 = 0x9E5D5157
+const UF2_MAGIC_END    = 0x0AB16F30
+const UF2_FLAG_NOT_MAIN_FLASH    = 0x00000001
+const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000
+
+// RP2-family UF2 family IDs (from the microsoft/uf2 registry).
+const RP2_UF2_FAMILIES = new Set([
+    0xe48bff56, // RP2040
+    0xe48bff57, // RP2350 absolute
+    0xe48bff58, // RP2350 data
+    0xe48bff59, // RP2350 ARM-S
+    0xe48bff5a, // RP2350 RISC-V
+    0xe48bff5b, // RP2350 ARM-NS
+])
+
+const FLASH_XIP_BASE = 0x10000000
+const FLASH_XIP_END  = 0x20000000   // generous upper bound for any RP2 XIP window
+const FLASH_SECTOR_SIZE = 4096
+
+/**
+ * Parse a UF2 file into contiguous flash ranges.
+ * Returns { ranges: [{address, data:Uint8Array}], families:Set<number>, blocks }.
+ */
+export function parseUf2(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+    if (u8.length === 0 || u8.length % 512 !== 0) {
+        throw new Error('Not a UF2 file (size is not a multiple of 512 bytes).')
+    }
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength)
+    const raw = []      // [{address, end, parts:[Uint8Array]}]
+    const families = new Set()
+    let blocks = 0
+    for (let off = 0; off < u8.length; off += 512) {
+        if (dv.getUint32(off, true) !== UF2_MAGIC_START0 ||
+            dv.getUint32(off + 4, true) !== UF2_MAGIC_START1 ||
+            dv.getUint32(off + 508, true) !== UF2_MAGIC_END) {
+            throw new Error(`Not a UF2 file (bad magic at block ${off / 512}).`)
+        }
+        const flags = dv.getUint32(off + 8, true)
+        if (flags & UF2_FLAG_NOT_MAIN_FLASH) continue
+        const addr = dv.getUint32(off + 12, true)
+        const size = dv.getUint32(off + 16, true)
+        if (size > 476) throw new Error(`UF2 block ${off / 512} has invalid payload size ${size}.`)
+        if (flags & UF2_FLAG_FAMILY_ID_PRESENT) families.add(dv.getUint32(off + 28, true))
+        const payload = u8.subarray(off + 32, off + 32 + size)
+        const last = raw[raw.length - 1]
+        if (last && addr === last.end) {
+            last.parts.push(payload)
+            last.end += size
+        } else {
+            raw.push({ address: addr, end: addr + size, parts: [payload] })
+        }
+        blocks++
+    }
+    const ranges = raw.map(r => {
+        const data = new Uint8Array(r.end - r.address)
+        let o = 0
+        for (const p of r.parts) { data.set(p, o); o += p.length }
+        return { address: r.address, data }
+    })
+    return { ranges, families, blocks }
+}
+
+const PICOBOOT_VID = 0x2e8a
+const RP2040_BOOT_PID = 0x0003   // RP2350 BOOTSEL is 0x000f (unless OTP-overridden)
+const PICOBOOT_MAGIC = 0x431fd10b
+
+const PB_CMD = {
+    EXCLUSIVE_ACCESS: 0x01,
+    REBOOT:           0x02,   // RP2040 only
+    FLASH_ERASE:      0x03,
+    READ:             0x84,
+    WRITE:            0x05,
+    EXIT_XIP:         0x06,
+    REBOOT2:          0x0a,   // RP2350 only
+}
+
+// GET_COMMAND_STATUS dStatusCode values (RP2350 datasheet table 468).
+const PB_STATUS_NAMES = [
+    'OK', 'UNKNOWN_CMD', 'INVALID_CMD_LENGTH', 'INVALID_TRANSFER_LENGTH',
+    'INVALID_ADDRESS', 'BAD_ALIGNMENT', 'INTERLEAVED_WRITE', 'REBOOTING',
+    'UNKNOWN_ERROR', 'INVALID_STATE', 'NOT_PERMITTED', 'INVALID_ARG',
+    'BUFFER_TOO_SMALL', 'PRECONDITION_NOT_MET', 'MODIFIED_DATA',
+    'INVALID_DATA', 'NOT_FOUND', 'UNSUPPORTED_MODIFICATION',
+]
+
+// REBOOT2 flags (bootrom reboot() API, RP2350 datasheet §5.4.8.24).
+const REBOOT2_FLAG_FLASH_UPDATE = 0x0004
+
+class PicobootDevice {
+    constructor(usbDevice) {
+        this.device = usbDevice
+        this.token = 1
+        this.ifaceNumber = null
+        this.epOut = null
+        this.epIn = null
+        this.isRp2040 = false
+    }
+
+    async open() {
+        const d = this.device
+        await d.open()
+        if (!d.configuration) await d.selectConfiguration(1)
+        // The PICOBOOT interface is identified by class ff / subclass 00 /
+        // protocol 00 — never by interface number, which shifts depending on
+        // whether the MSC interface is exposed (datasheet §5.6.2).
+        let alt = null
+        for (const iface of d.configuration.interfaces) {
+            for (const a of iface.alternates) {
+                if (a.interfaceClass === 0xff && a.interfaceSubclass === 0x00 && a.interfaceProtocol === 0x00) {
+                    this.ifaceNumber = iface.interfaceNumber
+                    alt = a
+                    break
+                }
+            }
+            if (alt) break
+        }
+        if (alt === null) {
+            throw new Error(
+                'No PICOBOOT interface on this USB device — is it really an RP2040/RP2350 in BOOTSEL mode? ' +
+                '(It can also be disabled via OTP on locked-down boards.)'
+            )
+        }
+        for (const ep of alt.endpoints) {
+            if (ep.type !== 'bulk') continue
+            if (ep.direction === 'out') this.epOut = ep.endpointNumber
+            else if (ep.direction === 'in') this.epIn = ep.endpointNumber
+        }
+        if (this.epOut === null || this.epIn === null) {
+            throw new Error('PICOBOOT bulk endpoints not found.')
+        }
+        await d.claimInterface(this.ifaceNumber)
+        this.isRp2040 = d.productId === RP2040_BOOT_PID
+        // Clean slate: clears stalls, aborts any in-flight MSC/flash
+        // operation, drops stale EXCLUSIVE_ACCESS.
+        await this.interfaceReset()
+    }
+
+    async interfaceReset() {
+        await this.device.controlTransferOut({
+            requestType: 'vendor', recipient: 'interface',
+            request: 0x41, value: 0, index: this.ifaceNumber,
+        })
+    }
+
+    async commandStatus() {
+        const r = await this.device.controlTransferIn({
+            requestType: 'vendor', recipient: 'interface',
+            request: 0x42, value: 0, index: this.ifaceNumber,
+        }, 16)
+        if (!r.data || r.data.byteLength < 10) return null
+        return {
+            token: r.data.getUint32(0, true),
+            statusCode: r.data.getUint32(4, true),
+            cmdId: r.data.getUint8(8),
+            inProgress: r.data.getUint8(9),
+        }
+    }
+
+    async _failFromStall(what) {
+        let detail = ''
+        try {
+            const st = await this.commandStatus()
+            if (st && st.statusCode) {
+                detail = `: ${PB_STATUS_NAMES[st.statusCode] || ('status ' + st.statusCode)}`
+            }
+        } catch (_) {}
+        try {
+            await this.device.clearHalt('out', this.epOut)
+            await this.device.clearHalt('in', this.epIn)
+            await this.interfaceReset()
+        } catch (_) {}
+        throw new Error(`PICOBOOT ${what} failed${detail}`)
+    }
+
+    /**
+     * Send one 32-byte PICOBOOT command, move dataOut/dataIn over the bulk
+     * pipe, and consume the zero-length success ACK (datasheet §5.6.4).
+     */
+    async _cmd(cmdId, cmdSize, transferLength, fillArgs = null, dataOut = null, { skipAck = false } = {}) {
+        const pkt = new ArrayBuffer(32)
+        const dv = new DataView(pkt)
+        dv.setUint32(0, PICOBOOT_MAGIC, true)
+        dv.setUint32(4, this.token++, true)
+        dv.setUint8(8, cmdId)
+        dv.setUint8(9, cmdSize)
+        dv.setUint32(12, transferLength, true)
+        if (fillArgs) fillArgs(dv)   // args live at offset 0x10
+
+        const name = `cmd 0x${cmdId.toString(16)}`
+        let r = await this.device.transferOut(this.epOut, pkt)
+        if (r.status === 'stall') await this._failFromStall(name)
+
+        let dataIn = null
+        if (dataOut) {
+            r = await this.device.transferOut(this.epOut, dataOut)
+            if (r.status === 'stall') await this._failFromStall(`${name} data`)
+        } else if ((cmdId & 0x80) && transferLength > 0) {
+            const res = await this.device.transferIn(this.epIn, transferLength)
+            if (res.status === 'stall') await this._failFromStall(`${name} read`)
+            dataIn = res.data
+            // IN commands are acknowledged by the HOST with a zero-length OUT.
+            const ack = await this.device.transferOut(this.epOut, new ArrayBuffer(0))
+            if (ack.status === 'stall') await this._failFromStall(`${name} ack`)
+            return dataIn
+        }
+        if (!skipAck) {
+            // OUT/no-data commands complete with a zero-length IN from device.
+            const ack = await this.device.transferIn(this.epIn, 64)
+            if (ack.status === 'stall') await this._failFromStall(`${name} ack`)
+        }
+        return dataIn
+    }
+
+    /** levels: 0 = release, 1 = exclusive, 2 = exclusive + eject MSC drive */
+    async exclusiveAccess(level) {
+        await this._cmd(PB_CMD.EXCLUSIVE_ACCESS, 0x01, 0, dv => dv.setUint8(0x10, level))
+    }
+
+    async exitXip() {
+        await this._cmd(PB_CMD.EXIT_XIP, 0x00, 0)
+    }
+
+    async flashErase(addr, size) {
+        if (addr % FLASH_SECTOR_SIZE || size % FLASH_SECTOR_SIZE) {
+            throw new Error(`FLASH_ERASE not sector-aligned (0x${addr.toString(16)} +${size})`)
+        }
+        await this._cmd(PB_CMD.FLASH_ERASE, 0x08, 0, dv => {
+            dv.setUint32(0x10, addr, true)
+            dv.setUint32(0x14, size, true)
+        })
+    }
+
+    async flashWrite(addr, data) {
+        // Flash writes must be 256-byte page aligned; bootrom zero-pads the
+        // final partial page (datasheet §5.6.4.5).
+        if (addr % 256) throw new Error(`WRITE not page-aligned (0x${addr.toString(16)})`)
+        const buf = data.buffer
+            ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+            : data
+        await this._cmd(PB_CMD.WRITE, 0x08, data.byteLength, dv => {
+            dv.setUint32(0x10, addr, true)
+            dv.setUint32(0x14, data.byteLength, true)
+        }, buf)
+    }
+
+    /**
+     * Reboot out of BOOTSEL into the (freshly written) firmware.
+     * RP2350 uses REBOOT2 with REBOOT_TYPE_FLASH_UPDATE — same boot type the
+     * bootrom uses after a UF2 drag — pointing p0 at the updated region.
+     * RP2040 uses the legacy REBOOT with pc=0 (standard flash boot).
+     */
+    async rebootIntoFirmware(flashAddr, delayMs = 500) {
+        try {
+            if (this.isRp2040) {
+                await this._cmd(PB_CMD.REBOOT, 0x0c, 0, dv => {
+                    dv.setUint32(0x10, 0, true)         // pc: 0 = standard boot
+                    dv.setUint32(0x14, 0, true)         // sp: unused
+                    dv.setUint32(0x18, delayMs, true)
+                }, null, { skipAck: false })
+            } else {
+                await this._cmd(PB_CMD.REBOOT2, 0x10, 0, dv => {
+                    dv.setUint32(0x10, REBOOT2_FLAG_FLASH_UPDATE, true)
+                    dv.setUint32(0x14, delayMs, true)
+                    dv.setUint32(0x18, flashAddr, true) // p0: start of updated region
+                    dv.setUint32(0x1c, 0, true)         // p1: unused
+                })
+            }
+        } catch (err) {
+            // The chip can drop off the bus before the ACK round-trips —
+            // that's the reboot doing its job, not a failure.
+            const msg = String(err && err.message || err || '')
+            if (!/disconnect|device|network|transfer/i.test(msg)) throw err
+        }
+    }
+}
+
+/**
+ * Flash a Jumperless V5 (or any RP2040/RP2350) in BOOTSEL mode with a UF2,
+ * over WebUSB using the PICOBOOT protocol — no file dragging needed.
+ *
+ * @param {object} opts
+ * @param {Uint8Array} opts.uf2Data       The firmware.uf2 contents.
+ * @param {USBDevice} [opts.usbDevice]    Already-picked device; otherwise a
+ *                                        WebUSB picker is shown (must be in a
+ *                                        user-gesture context).
+ * @param {(msg:string)=>void} [opts.onLog]
+ * @param {(written:number,total:number)=>void} [opts.onProgress]
+ * @param {AbortSignal} [opts.abortSignal]
+ */
+export async function flashJumperlessViaPicoboot({ uf2Data, usbDevice = null, onLog, onProgress, abortSignal = null }) {
+    const log = (m) => { try { onLog && onLog(m) } catch (_) {} }
+    if (typeof navigator === 'undefined' || !navigator.usb) {
+        throw new Error('WebUSB is not available in this browser. Use Chrome, Edge, or Opera.')
+    }
+
+    const { ranges, families, blocks } = parseUf2(uf2Data)
+    if (!ranges.length) throw new Error('UF2 file contained no flashable blocks.')
+    for (const fam of families) {
+        if (!RP2_UF2_FAMILIES.has(fam)) {
+            throw new Error(`UF2 family 0x${fam.toString(16)} is not an RP2040/RP2350 family — wrong firmware file?`)
+        }
+    }
+    for (const r of ranges) {
+        if (r.address < FLASH_XIP_BASE || r.address + r.data.length > FLASH_XIP_END) {
+            throw new Error(
+                `UF2 targets 0x${r.address.toString(16)}, outside the flash window — ` +
+                'RAM-only UF2s are not supported by the in-browser flasher.'
+            )
+        }
+        if (r.address % FLASH_SECTOR_SIZE) {
+            throw new Error(
+                `UF2 range starts at 0x${r.address.toString(16)} (not 4 kB aligned) — ` +
+                'flash it by dragging the file onto the BOOTSEL drive instead.'
+            )
+        }
+    }
+    const total = ranges.reduce((s, r) => s + r.data.length, 0)
+    log(`UF2 parsed: ${blocks} blocks, ${ranges.length} range(s), ${total.toLocaleString()} bytes.`)
+
+    let device = usbDevice
+    if (!device) {
+        log('Select the "RP2350 Boot" USB device…')
+        try {
+            device = await navigator.usb.requestDevice({ filters: [{ vendorId: PICOBOOT_VID }] })
+        } catch (err) {
+            if (err && err.name === 'NotFoundError') throw new Error('No USB device selected — cancelled.')
+            throw err
+        }
+    }
+
+    let abortHandler = null
+    if (abortSignal) {
+        if (abortSignal.aborted) throw new Error('Aborted before start')
+        // Closing the device rejects the pending transfer, unwinding the
+        // flash loop with an error the caller treats as cancellation.
+        abortHandler = () => { try { device.close() } catch (_) {} }
+        abortSignal.addEventListener('abort', abortHandler, { once: true })
+    }
+
+    const pb = new PicobootDevice(device)
+    try {
+        try {
+            await pb.open()
+        } catch (err) {
+            const msg = String(err && err.message || err || '')
+            if (/access denied|unable to claim|protected/i.test(msg)) {
+                throw new Error(
+                    'Could not claim the PICOBOOT interface — another program (picotool?) may be using it. ' +
+                    'On Linux, you may need the Raspberry Pi udev rules.'
+                )
+            }
+            throw err
+        }
+        log(`Connected to ${device.productName || 'RP2 bootloader'} via PICOBOOT (${pb.isRp2040 ? 'RP2040' : 'RP2350'}).`)
+
+        // Keep the BOOTSEL drive from interfering mid-write (a stray Finder
+        // touch would otherwise abort our transfer as INTERLEAVED_WRITE).
+        await pb.exclusiveAccess(1)
+        await pb.exitXip()
+
+        // Erase+write interleaved in chunks so the progress bar tracks
+        // reality instead of jumping after one giant multi-second erase.
+        const CHUNK = 32768   // 8 flash sectors per round-trip
+        let written = 0
+        for (const r of ranges) {
+            log(`Writing ${r.data.length.toLocaleString()} B at 0x${r.address.toString(16)}…`)
+            for (let off = 0; off < r.data.length; off += CHUNK) {
+                const chunk = r.data.subarray(off, Math.min(off + CHUNK, r.data.length))
+                const eraseLen = Math.ceil(chunk.length / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE
+                await pb.flashErase(r.address + off, eraseLen)
+                await pb.flashWrite(r.address + off, chunk)
+                written += chunk.length
+                try { onProgress && onProgress(written, total) } catch (_) {}
+            }
+        }
+
+        log('Write complete. Rebooting into the new firmware…')
+        await pb.rebootIntoFirmware(ranges[0].address)
+    } catch (err) {
+        if (abortSignal && abortSignal.aborted) throw new Error('Flash aborted.')
+        throw err
+    } finally {
+        if (abortSignal && abortHandler) abortSignal.removeEventListener('abort', abortHandler)
+        try { await device.close() } catch (_) {}
+    }
+    log('Done. The Jumperless will reboot into the new firmware.')
+}
+
 /* ── Error mapping ───────────────────────────────────────────────────────── */
 
 function friendlySerialError(err, action = 'access the serial port') {

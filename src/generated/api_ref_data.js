@@ -389,7 +389,9 @@ export const API_REF_ARG_HELP = {
   },
   "oled_get_pixel": {
     "x": "X coordinate (0 to width-1)",
-    "y": "Y coordinate (0 to height-1)"
+    "y": "Y coordinate (0 to height-1)",
+    "Text(text, x, y, font, size, halign, valign, z)": "`.text`, `.font`, `.size`, `.x`, `.y`, `.z`, `.visible`",
+    "oled_add_shape(screen, kind, x": "0=line, 1=rect, 2=filled rect)"
   },
   "probe_read": {
     "blocking": "If `True` (default), the function will wait until a pad is touched. If `False`, it returns immediately."
@@ -683,6 +685,8 @@ export const API_REF_SYMBOLS = [
   "nodes_has_changes",
   "nodes_help",
   "nodes_save",
+  "oled_add_shape",
+  "oled_add_text",
   "oled_clear",
   "oled_connect",
   "oled_copy_print",
@@ -696,10 +700,20 @@ export const API_REF_SYMBOLS = [
   "oled_get_text_size",
   "oled_load_bitmap",
   "oled_print",
+  "oled_screen",
+  "oled_screen_clear",
+  "oled_screen_free",
+  "oled_screen_hide",
+  "oled_screen_load",
+  "oled_screen_reset",
+  "oled_screen_save",
+  "oled_screen_show",
+  "oled_set",
   "oled_set_font",
   "oled_set_framebuffer",
   "oled_set_pixel",
   "oled_set_text_size",
+  "oled_set_var",
   "oled_show",
   "oled_show_bitmap_file",
   "os",

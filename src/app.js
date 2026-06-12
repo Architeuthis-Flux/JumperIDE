@@ -36,7 +36,7 @@ import { API_REF_HEADINGS } from './generated/api_ref_data.js'
 import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROPYTHON } from './apiRefMicroPython.js'
 import { getBadgeAnchor } from './apiRefBadge.js'
 import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
-import { flashReplayBadge, rebootJumperlessToBootsel, readFirmwareSource } from './firmware_flash.js'
+import { flashReplayBadge, rebootJumperlessToBootsel, readFirmwareSource, flashJumperlessViaPicoboot } from './firmware_flash.js'
 import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
@@ -3884,25 +3884,59 @@ function renderJumperlessModal(update, instructions, actions) {
         }
     }
 
-    instructions.innerHTML = `
-        <p>The Jumperless flashes by drag-and-drop — there's no in-browser write to its UF2 bootloader yet.
-        We'll do the rest of the dance for you:</p>
-        <ol>
-            <li>Click <strong>Reboot to bootloader</strong>. Your Jumperless will disconnect and reappear as a USB drive named <code>RP2350</code> (or <code>RPI-RP2</code>).</li>
-            <li>Click <strong>Download firmware.uf2</strong>.</li>
-            <li>Drag the downloaded <code>firmware.uf2</code> onto that drive. The board will flash and reboot automatically.</li>
-            <li>Reconnect via the USB button when it's back.</li>
-        </ol>
-    `
+    const webusbOk = typeof navigator !== 'undefined' && !!navigator.usb
+
+    if (webusbOk && uf2Url) {
+        instructions.innerHTML = `
+            <p><strong>Flash from browser</strong> does the whole dance in one go: it reboots the
+            Jumperless into its UF2 bootloader, downloads <code>firmware.uf2</code>, and writes it
+            over USB using the same PICOBOOT protocol <code>picotool</code> uses — no file dragging.</p>
+            <p>When the device picker opens, choose <code>RP2350 Boot</code> (it can take a couple of
+            seconds to appear after the reboot). If the Jumperless isn't connected to JumperIDE right
+            now, hold its BOOTSEL button while plugging in USB first.</p>
+            <p>Prefer the manual route? <em>Reboot to bootloader</em>, <em>Download firmware.uf2</em>,
+            and drag the file onto the <code>RP2350</code> drive.</p>
+        `
+    } else {
+        instructions.innerHTML = `
+            <p>The Jumperless flashes by drag-and-drop (in-browser flashing needs WebUSB — Chrome, Edge, or Opera).
+            We'll do the rest of the dance for you:</p>
+            <ol>
+                <li>Click <strong>Reboot to bootloader</strong>. Your Jumperless will disconnect and reappear as a USB drive named <code>RP2350</code> (or <code>RPI-RP2</code>).</li>
+                <li>Click <strong>Download firmware.uf2</strong>.</li>
+                <li>Drag the downloaded <code>firmware.uf2</code> onto that drive. The board will flash and reboot automatically.</li>
+                <li>Reconnect via the USB button when it's back.</li>
+            </ol>
+        `
+    }
 
     actions.innerHTML = ''
+
+    if (webusbOk && uf2Url) {
+        const btnWebFlash = document.createElement('button')
+        btnWebFlash.className = 'fw-btn'
+        btnWebFlash.textContent = 'Flash from browser'
+        btnWebFlash.onclick = async () => {
+            btnWebFlash.disabled = true
+            try {
+                await webFlashJumperless(uf2Url)
+            } catch (err) {
+                fwLog('ERROR: ' + (err.message || err))
+            } finally {
+                btnWebFlash.disabled = false
+            }
+        }
+        actions.appendChild(btnWebFlash)
+    }
+
     const btnReboot = document.createElement('button')
-    btnReboot.className = 'fw-btn'
+    btnReboot.className = 'fw-btn' + (webusbOk && uf2Url ? ' secondary' : '')
     btnReboot.textContent = 'Reboot to bootloader'
     btnReboot.onclick = async () => {
         btnReboot.disabled = true
         try {
             await rebootJumperlessIntoBootsel()
+            fwLog('Look for an RP2350 / RPI-RP2 drive on your computer, then drop firmware.uf2 onto it.')
         } catch (err) {
             fwLog('Could not reboot: ' + (err.message || err))
             btnReboot.disabled = false
@@ -3910,7 +3944,7 @@ function renderJumperlessModal(update, instructions, actions) {
     }
 
     const btnDownload = document.createElement('a')
-    btnDownload.className = 'fw-btn'
+    btnDownload.className = 'fw-btn' + (webusbOk && uf2Url ? ' secondary' : '')
     btnDownload.href = uf2Url || update.releaseUrl
     btnDownload.target = '_blank'
     btnDownload.rel = 'noopener'
@@ -3926,6 +3960,119 @@ function renderJumperlessModal(update, instructions, actions) {
     actions.append(btnReboot, btnDownload, btnRelease)
 }
 
+/**
+ * One-click in-browser Jumperless flash:
+ *   1. Kick off the firmware.uf2 download (continues during the next steps).
+ *   2. 1200-baud-touch the current REPL port to reboot into BOOTSEL.
+ *   3. Open the WebUSB picker — Chrome's chooser updates live, so the
+ *      "RP2350 Boot" device pops in a second or two after the reset.
+ *   4. Write flash via PICOBOOT and reboot into the new firmware.
+ *
+ * Must be called from a click handler: the WebUSB picker needs the user
+ * gesture, which survives the ~1 s of awaits in step 2.
+ */
+async function webFlashJumperless(uf2Url) {
+    const uf2Promise = readFirmwareSource({ url: uf2Url, onLog: (m) => fwLog(m) })
+    uf2Promise.catch(() => {})  // surfaced via await below; avoid unhandled rejection if we bail first
+
+    let serialInfo = null
+    if (port && typeof port.releaseStreams === 'function') {
+        serialInfo = await rebootJumperlessIntoBootsel().catch((err) => {
+            fwLog('Auto-reboot to BOOTSEL failed: ' + (err.message || err))
+            fwLog('Put the board into BOOTSEL manually (hold BOOTSEL while plugging USB), then pick it in the dialog.')
+            return null
+        })
+    } else if (port) {
+        fwLog('Connected over WebSocket/BLE — can\'t auto-reboot. Put the board into BOOTSEL manually (hold BOOTSEL while plugging USB).')
+    } else {
+        fwLog('No active connection. If the board isn\'t already in BOOTSEL, hold its BOOTSEL button while plugging in USB.')
+    }
+
+    fwLog('Select the "RP2350 Boot" device in the picker (it may take a moment to appear)…')
+    let usbDevice
+    try {
+        usbDevice = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x2e8a }] })
+    } catch (err) {
+        if (err && err.name === 'NotFoundError') {
+            throw new Error('No USB device selected — cancelled. The board is (probably) now in BOOTSEL; click "Flash from browser" again to retry.')
+        }
+        if (/user gesture|user activation|transient activation/i.test(err.message || '')) {
+            throw new Error('The browser needs a fresh click for the device picker — the board is already in BOOTSEL, just click "Flash from browser" again.')
+        }
+        throw err
+    }
+
+    const uf2 = await uf2Promise
+    await flashJumperlessWithUf2(uf2, usbDevice, serialInfo)
+}
+
+async function flashJumperlessWithUf2(uf2Data, usbDevice, serialInfo = null) {
+    firmwareFlashAbort = new AbortController()
+    setFirmwareFlashInProgress(true)
+    let cancelled = false
+    firmwareFlashAbort.signal.addEventListener('abort', () => { cancelled = true }, { once: true })
+
+    try {
+        await flashJumperlessViaPicoboot({
+            uf2Data,
+            usbDevice,
+            abortSignal: firmwareFlashAbort.signal,
+            onLog: (m) => fwLog(m),
+            onProgress: (written, total) => fwProgress(written, total),
+        })
+    } catch (err) {
+        if (cancelled) {
+            fwLog('Flash cancelled. The board may not boot until re-flashed — it falls back to BOOTSEL if so, just flash again.')
+            toastr.warning('Flash cancelled.', 'Firmware update', { timeOut: 4000 })
+            throw new Error('Flash cancelled by user.')
+        }
+        throw err
+    } finally {
+        firmwareFlashAbort = null
+        setFirmwareFlashInProgress(false)
+    }
+
+    fwProgress(1, 1)
+    toastr.success('Jumperless flashed. Reconnecting…', 'Firmware updated')
+    reconnectAfterJumperlessFlash(serialInfo).catch((err) => {
+        console.warn('Auto-reconnect failed', err)
+        toastr.warning('Couldn\'t reconnect automatically. Click the USB button to reconnect.', 'Firmware updated')
+    })
+}
+
+/**
+ * After a PICOBOOT flash the chip reboots and re-enumerates as the normal
+ * Jumperless CDC device, for which the browser still holds a Web Serial
+ * grant from the pre-flash session. Poll getPorts() for the same VID/PID
+ * and reconnect without a picker.
+ */
+async function reconnectAfterJumperlessFlash(serialInfo) {
+    if (typeof navigator.serial === 'undefined' || !serialInfo || !serialInfo.usbVendorId) return
+
+    const DEADLINE_MS = 15000
+    const POLL_MS = 500
+    const start = Date.now()
+    while (Date.now() - start < DEADLINE_MS) {
+        await sleep(POLL_MS)
+        if (port) return  // user reconnected manually
+        let ports = []
+        try { ports = await navigator.serial.getPorts() } catch (_) { continue }
+        const match = ports.find(p => {
+            try {
+                const i = p.getInfo()
+                return i.usbVendorId === serialInfo.usbVendorId && i.usbProductId === serialInfo.usbProductId
+            } catch (_) { return false }
+        })
+        if (match) {
+            // Give the CDC stack a beat to finish coming up before opening.
+            await sleep(1000)
+            await connectDevice('usb', { existingSerialPort: match, silent: true })
+            return
+        }
+    }
+    throw new Error('Device did not re-enumerate within 15 s')
+}
+
 async function rebootJumperlessIntoBootsel() {
     if (!port) throw new Error('No device connected.')
     fwLog('Releasing REPL session…')
@@ -3935,6 +4082,10 @@ async function rebootJumperlessIntoBootsel() {
         throw new Error('Bootloader reboot is only supported on Web Serial connections.')
     }
     const sp = await port.releaseStreams()
+    // Remember the CDC identity so the in-browser flash flow can find the
+    // device again after it reboots into the new firmware.
+    let serialInfo = null
+    try { serialInfo = sp.getInfo ? sp.getInfo() : null } catch (_) {}
     // Drop our handle to the REPL port so onDisconnect doesn't fire spuriously.
     // Banner stays visible; it'll naturally clear when the device disconnects
     // after BOOTSEL or comes back with a newer firmware version.
@@ -3947,7 +4098,8 @@ async function rebootJumperlessIntoBootsel() {
 
     fwLog('Tickling 1200-baud reset to enter BOOTSEL…')
     await rebootJumperlessToBootsel(sp)
-    fwLog('Done. Look for an RP2350 / RPI-RP2 drive on your computer, then drop firmware.uf2 onto it.')
+    fwLog('Rebooted to BOOTSEL.')
+    return serialInfo
 }
 
 /* ── Replay Badge (ESP32-S3) — esptool-js ─────────────────────────────── */
