@@ -694,9 +694,14 @@ export async function flashJumperlessViaPicoboot({ uf2Data, usbDevice = null, on
         }
         log(`Connected to ${device.productName || 'RP2 bootloader'} via PICOBOOT (${pb.isRp2040 ? 'RP2040' : 'RP2350'}).`)
 
-        // Keep the BOOTSEL drive from interfering mid-write (a stray Finder
-        // touch would otherwise abort our transfer as INTERLEAVED_WRITE).
-        await pb.exclusiveAccess(1)
+        // EXCLUSIVE_AND_EJECT: marks the BOOTSEL drive's media as not present,
+        // which unmounts it from Finder/Explorer for the duration of the
+        // flash. That keeps the OS from poking the media mid-write (would
+        // abort us as INTERLEAVED_WRITE) and means the final reboot doesn't
+        // rip out a mounted volume. Claimed early enough — e.g. on pickerless
+        // re-flash — the drive never finishes mounting at all.
+        await pb.exclusiveAccess(2)
+        log('BOOTSEL drive ejected — flashing over PICOBOOT only.')
         await pb.exitXip()
 
         // Erase+write interleaved in chunks so the progress bar tracks

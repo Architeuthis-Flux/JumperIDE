@@ -233,7 +233,7 @@ async function prepareNewPort(type) {
     return new_port
 }
 
-export async function connectDevice(type, { existingSerialPort = null, silent = false } = {}) {
+export async function connectDevice(type, { existingSerialPort = null, silent = false, quietProbe = false, probeAttempts = 3 } = {}) {
     if (port) {
         //if (!confirm('Disconnect current device?')) { return }
         await disconnectDevice()
@@ -298,7 +298,7 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
         // background asyncio tasks/IRQs while we're probing. Sentinel filtering
         // in rawmode.js handles most of it; this retry loop covers the rest so
         // the user sees a smooth connect even when the first attempt is unlucky.
-        const MAX_PROBE_ATTEMPTS = 3
+        const MAX_PROBE_ATTEMPTS = probeAttempts
         let raw = null
         let lastErr = null
 
@@ -369,7 +369,12 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
         }
 
         if (lastErr) {
-            if (lastErr.message.includes('Timeout')) {
+            if (quietProbe) {
+                // Caller is probing candidate ports (e.g. post-flash reconnect
+                // hunting for the REPL CDC) — a failed probe is expected, so
+                // skip the scary toasts and the recovery-flash offer.
+                console.warn('Quiet probe: device did not respond to REPL probe', lastErr)
+            } else if (lastErr.message.includes('Timeout')) {
                 report('Device is not responding', new Error(`Ensure that:\n- You're using a recent version of MicroPython\n- The correct device is selected`))
                 // Port opened but the REPL never answered — common after a bad
                 // flash, or when an ESP32-S3 boots into a hung user app. Offer
@@ -1348,6 +1353,13 @@ const SCRIPT_INDEX_URL = 'https://docs.jumperless.org/scripts/index.json'
 // Set at build time via SCRIPT_REGISTRY_API_BASE env (default: https://jumperscripts.kevinc-af9.workers.dev)
 /* global __SCRIPT_REGISTRY_API_BASE__ */
 const SCRIPT_REGISTRY_API_BASE = __SCRIPT_REGISTRY_API_BASE__
+
+// Route firmware downloads through our own worker (/fw-proxy on the script
+// registry) ahead of the flaky public CORS proxies. A manually-set
+// window.JUMPERIDE_FIRMWARE_PROXY (e.g. from the console) still wins.
+if (typeof window !== 'undefined' && !window.JUMPERIDE_FIRMWARE_PROXY && SCRIPT_REGISTRY_API_BASE) {
+    window.JUMPERIDE_FIRMWARE_PROXY = `${SCRIPT_REGISTRY_API_BASE.replace(/\/$/, '')}/fw-proxy?url=`
+}
 
 export async function loadScriptIndex() {
     const listEl = QID('menu-scripts-list')
@@ -3891,9 +3903,11 @@ function renderJumperlessModal(update, instructions, actions) {
             <p><strong>Flash from browser</strong> does the whole dance in one go: it reboots the
             Jumperless into its UF2 bootloader, downloads <code>firmware.uf2</code>, and writes it
             over USB using the same PICOBOOT protocol <code>picotool</code> uses — no file dragging.</p>
-            <p>When the device picker opens, choose <code>RP2350 Boot</code> (it can take a couple of
-            seconds to appear after the reboot). If the Jumperless isn't connected to JumperIDE right
-            now, hold its BOOTSEL button while plugging in USB first.</p>
+            <p>The first time, a device picker opens — choose <code>RP2350 Boot</code> (it can take a
+            couple of seconds to appear after the reboot). After that, re-flashes are fully automatic:
+            the bootloader is claimed the moment it enumerates and its USB drive is ejected before the
+            OS can mount it. If the Jumperless isn't connected to JumperIDE right now, hold its BOOTSEL
+            button while plugging in USB first.</p>
             <p>Prefer the manual route? <em>Reboot to bootloader</em>, <em>Download firmware.uf2</em>,
             and drag the file onto the <code>RP2350</code> drive.</p>
         `
@@ -3963,47 +3977,182 @@ function renderJumperlessModal(update, instructions, actions) {
 /**
  * One-click in-browser Jumperless flash:
  *   1. Kick off the firmware.uf2 download (continues during the next steps).
- *   2. 1200-baud-touch the current REPL port to reboot into BOOTSEL.
+ *   2. 1200-baud-touch the device's CDC ports to reboot it into BOOTSEL.
  *   3. Open the WebUSB picker — Chrome's chooser updates live, so the
  *      "RP2350 Boot" device pops in a second or two after the reset.
  *   4. Write flash via PICOBOOT and reboot into the new firmware.
  *
- * Must be called from a click handler: the WebUSB picker needs the user
- * gesture, which survives the ~1 s of awaits in step 2.
+ * Firmware wrinkle for step 2: Adafruit TinyUSB only honors the 1200-baud
+ * touch on CDC 0 ("Jumperless Main"), while the IDE's REPL session rides on
+ * CDC 2. JumperlOS ≥5.7.0.10 honors the touch on CDC 2 as well, but for
+ * older firmware we need a one-time grant for the Main port: we touch every
+ * granted port on the device, verify the reboot actually happened (the CDC
+ * ports drop off the bus), and if it didn't, ask the user to click again
+ * and pick the Main port so we can touch that one directly.
+ *
+ * Must be called from a click handler: the WebUSB/serial pickers need the
+ * user gesture, which survives the ~1-2 s of awaits before them.
  */
+let needMainPortForBootsel = false
+
 async function webFlashJumperless(uf2Url) {
     const uf2Promise = readFirmwareSource({ url: uf2Url, onLog: (m) => fwLog(m) })
     uf2Promise.catch(() => {})  // surfaced via await below; avoid unhandled rejection if we bail first
 
+    // Snapshot granted ports before the touch so we can both (a) touch the
+    // device's other CDC ports and (b) detect the reboot by their vanishing.
+    let prePorts = []
+    try { prePorts = await navigator.serial.getPorts() } catch (_) {}
+
     let serialInfo = null
-    if (port && typeof port.releaseStreams === 'function') {
+    let touched = false
+
+    if (needMainPortForBootsel) {
+        // Previous attempt showed this firmware ignores the touch on the
+        // REPL port. Fresh user gesture → ask for the Main port explicitly.
+        fwLog('Pick the Jumperless\'s MAIN port (usually the lowest-numbered one)…')
+        let mainPort
+        try {
+            mainPort = await navigator.serial.requestPort()
+        } catch (err) {
+            if (err && err.name === 'NotFoundError') throw new Error('No port selected — cancelled.')
+            throw err
+        }
+        try { serialInfo = mainPort.getInfo ? mainPort.getInfo() : null } catch (_) {}
+        fwLog('Tickling 1200-baud reset on the main port…')
+        try {
+            await rebootJumperlessToBootsel(mainPort)
+            touched = true
+        } catch (err) {
+            fwLog('Touch failed: ' + (err.message || err))
+        }
+    } else if (port && typeof port.releaseStreams === 'function') {
         serialInfo = await rebootJumperlessIntoBootsel().catch((err) => {
             fwLog('Auto-reboot to BOOTSEL failed: ' + (err.message || err))
             fwLog('Put the board into BOOTSEL manually (hold BOOTSEL while plugging USB), then pick it in the dialog.')
             return null
         })
+        touched = !!serialInfo
     } else if (port) {
         fwLog('Connected over WebSocket/BLE — can\'t auto-reboot. Put the board into BOOTSEL manually (hold BOOTSEL while plugging USB).')
     } else {
         fwLog('No active connection. If the board isn\'t already in BOOTSEL, hold its BOOTSEL button while plugging in USB.')
     }
 
-    fwLog('Select the "RP2350 Boot" device in the picker (it may take a moment to appear)…')
-    let usbDevice
-    try {
-        usbDevice = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x2e8a }] })
-    } catch (err) {
-        if (err && err.name === 'NotFoundError') {
-            throw new Error('No USB device selected — cancelled. The board is (probably) now in BOOTSEL; click "Flash from browser" again to retry.')
+    // Touch every other granted port on the same device. On firmware that
+    // only honors the touch on CDC 0, this is what actually triggers the
+    // reboot — provided the Main port has been granted at some point.
+    if (serialInfo && serialInfo.usbVendorId) {
+        for (const p of prePorts) {
+            try {
+                const i = p.getInfo()
+                if (i.usbVendorId !== serialInfo.usbVendorId || i.usbProductId !== serialInfo.usbProductId) continue
+                await rebootJumperlessToBootsel(p)
+            } catch (_) { /* port busy / already rebooting — fine */ }
         }
-        if (/user gesture|user activation|transient activation/i.test(err.message || '')) {
-            throw new Error('The browser needs a fresh click for the device picker — the board is already in BOOTSEL, just click "Flash from browser" again.')
-        }
-        throw err
     }
+
+    // Verify the reboot actually happened before bothering with pickers.
+    if (touched) {
+        const entered = await waitForBootselEntry(prePorts, serialInfo, 4000)
+        if (!entered) {
+            needMainPortForBootsel = true
+            throw new Error(
+                'The board didn\'t reboot. This firmware only honors the 1200-baud reset on the ' +
+                '"Jumperless Main" port (CDC 0), not the REPL port the IDE uses. ' +
+                'Click "Flash from browser" again and pick the MAIN port in the picker that opens — ' +
+                'that grant is remembered, so future flashes will be automatic. ' +
+                '(Firmware 5.7.0.10+ accepts the reset on the REPL port directly.)'
+            )
+        }
+        needMainPortForBootsel = false
+        fwLog('Device rebooted into BOOTSEL.')
+    }
+
+    // WebUSB grants are keyed on VID/PID/serial and survive reboots, so after
+    // the first flash the BOOTSEL device shows up in getDevices() without a
+    // picker. Grabbing it the instant it enumerates lets the flasher eject
+    // the BOOTSEL drive before the OS even finishes mounting it — no drive
+    // popping up in Finder, no clicks needed.
+    let usbDevice = await findGrantedPicobootDevice(0)
+    if (!usbDevice && localStorage.getItem(PICOBOOT_GRANT_KEY)) {
+        fwLog('Waiting for the bootloader to enumerate…')
+        usbDevice = await findGrantedPicobootDevice(8000)
+        if (!usbDevice) fwLog('Previously-authorized device didn\'t reappear — falling back to the picker.')
+    }
+
+    if (!usbDevice) {
+        fwLog('Select the "RP2350 Boot" device in the picker (it may take a moment to appear)…')
+        try {
+            usbDevice = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x2e8a }] })
+        } catch (err) {
+            if (err && err.name === 'NotFoundError') {
+                throw new Error('No USB device selected — cancelled. The board is (probably) now in BOOTSEL; click "Flash from browser" again to retry.')
+            }
+            if (/user gesture|user activation|transient activation/i.test(err.message || '')) {
+                throw new Error('The browser needs a fresh click for the device picker — the board is already in BOOTSEL, just click "Flash from browser" again.')
+            }
+            throw err
+        }
+    }
+    try { localStorage.setItem(PICOBOOT_GRANT_KEY, '1') } catch (_) {}
 
     const uf2 = await uf2Promise
     await flashJumperlessWithUf2(uf2, usbDevice, serialInfo)
+}
+
+const PICOBOOT_GRANT_KEY = 'jumperless-picoboot-granted'
+
+/**
+ * Did the 1200-baud touch actually reboot the board into BOOTSEL?
+ * Two observable signals, no permissions needed beyond what we have:
+ *   - an authorized RP2 BOOTSEL device appears in usb.getDevices(), or
+ *   - the device's granted CDC ports drop out of serial.getPorts()
+ *     (getPorts only lists currently-connected devices).
+ */
+async function waitForBootselEntry(prePorts, serialInfo, timeoutMs) {
+    const watched = (serialInfo && serialInfo.usbVendorId)
+        ? prePorts.filter(p => {
+            try {
+                const i = p.getInfo()
+                return i.usbVendorId === serialInfo.usbVendorId && i.usbProductId === serialInfo.usbProductId
+            } catch (_) { return false }
+        })
+        : []
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+        try {
+            const devices = await navigator.usb.getDevices()
+            if (devices.some(d => d.vendorId === 0x2e8a)) return true
+        } catch (_) {}
+        if (watched.length) {
+            try {
+                const now = new Set(await navigator.serial.getPorts())
+                if (watched.some(p => !now.has(p))) return true
+            } catch (_) {}
+        }
+        if (Date.now() >= deadline) return false
+        await sleep(300)
+    }
+}
+
+/**
+ * Look for an already-authorized RP2 BOOTSEL device (no picker, no user
+ * gesture needed). Polls for up to timeoutMs since the chip takes a second
+ * or two to re-enumerate after the 1200-baud reset.
+ */
+async function findGrantedPicobootDevice(timeoutMs) {
+    if (typeof navigator === 'undefined' || !navigator.usb) return null
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+        try {
+            const devices = await navigator.usb.getDevices()
+            const match = devices.find(d => d.vendorId === 0x2e8a)
+            if (match) return match
+        } catch (_) { return null }
+        if (Date.now() >= deadline) return null
+        await sleep(250)
+    }
 }
 
 async function flashJumperlessWithUf2(uf2Data, usbDevice, serialInfo = null) {
@@ -4036,41 +4185,109 @@ async function flashJumperlessWithUf2(uf2Data, usbDevice, serialInfo = null) {
     toastr.success('Jumperless flashed. Reconnecting…', 'Firmware updated')
     reconnectAfterJumperlessFlash(serialInfo).catch((err) => {
         console.warn('Auto-reconnect failed', err)
-        toastr.warning('Couldn\'t reconnect automatically. Click the USB button to reconnect.', 'Firmware updated')
+        toastr.warning(sanitizeHTML(err.message || 'Couldn\'t reconnect automatically. Click the USB button to reconnect.'), 'Firmware updated')
     })
 }
 
 /**
  * After a PICOBOOT flash the chip reboots and re-enumerates as the normal
- * Jumperless CDC device, for which the browser still holds a Web Serial
- * grant from the pre-flash session. Poll getPorts() for the same VID/PID
- * and reconnect without a picker.
+ * Jumperless CDC device, for which the browser still holds Web Serial
+ * grants from before. The Jumperless exposes four CDC ports that all share
+ * one VID/PID, so matching on IDs alone can land us on the wrong one (e.g.
+ * the "Jumperless Main" terminal instead of the MicroPython REPL).
+ *
+ * Autodetection, in order of confidence:
+ *   1. Object identity — Chrome hands back the *same* SerialPort instance
+ *      when the device re-enumerates, so the port the REPL session was on
+ *      before the flash (lastReplSerialPort) is the right one.
+ *   2. Probe — try other granted ports with the matching VID/PID; the
+ *      connect flow's raw-REPL probe fails on non-REPL ports, in which case
+ *      we disconnect and try the next candidate.
+ * The user can always override by clicking the USB button and picking a
+ * port manually (we say so if autodetection comes up empty).
  */
-async function reconnectAfterJumperlessFlash(serialInfo) {
-    if (typeof navigator.serial === 'undefined' || !serialInfo || !serialInfo.usbVendorId) return
+let lastReplSerialPort = null
 
-    const DEADLINE_MS = 15000
+async function reconnectAfterJumperlessFlash(serialInfo) {
+    if (typeof navigator.serial === 'undefined') return
+    const wanted = lastReplSerialPort
+    if (!wanted && (!serialInfo || !serialInfo.usbVendorId)) return
+
+    const ENUM_DEADLINE_MS = 15000   // for the device to come back on the bus
+    const IDENTITY_GRACE_MS = 5000   // extra time for the known port object specifically
+    const BOOT_SETTLE_MS = 2500      // first boot after a flash does extra init work
     const POLL_MS = 500
+    const MAX_PASSES = 2
+    const probeEnabled = getSetting('interrupt-device')
+
+    const matches = (p) => {
+        try {
+            const i = p.getInfo()
+            return serialInfo && i.usbVendorId === serialInfo.usbVendorId && i.usbProductId === serialInfo.usbProductId
+        } catch (_) { return false }
+    }
+
+    // Phase 1: wait for the device to re-enumerate. Prefer the exact
+    // SerialPort object the REPL was on before the flash, but don't bank on
+    // it — Chrome doesn't always hand back the same instance after the
+    // device drops off the bus.
     const start = Date.now()
-    while (Date.now() - start < DEADLINE_MS) {
-        await sleep(POLL_MS)
+    for (;;) {
         if (port) return  // user reconnected manually
         let ports = []
-        try { ports = await navigator.serial.getPorts() } catch (_) { continue }
-        const match = ports.find(p => {
-            try {
-                const i = p.getInfo()
-                return i.usbVendorId === serialInfo.usbVendorId && i.usbProductId === serialInfo.usbProductId
-            } catch (_) { return false }
-        })
-        if (match) {
-            // Give the CDC stack a beat to finish coming up before opening.
-            await sleep(1000)
-            await connectDevice('usb', { existingSerialPort: match, silent: true })
-            return
+        try { ports = await navigator.serial.getPorts() } catch (_) {}
+        if (wanted && ports.includes(wanted)) break
+        if (ports.some(matches) && (!wanted || Date.now() - start >= IDENTITY_GRACE_MS)) break
+        if (Date.now() - start >= ENUM_DEADLINE_MS) {
+            throw new Error('Device did not re-enumerate in time. Click the USB button to reconnect.')
         }
+        await sleep(POLL_MS)
     }
-    throw new Error('Device did not re-enumerate within 15 s')
+    await sleep(BOOT_SETTLE_MS)
+
+    // Phase 2: hunt for the REPL among the device's CDC ports (they all
+    // share one VID/PID). Identity match goes first; for the rest the
+    // raw-REPL probe is the detector — the main terminal and passthrough
+    // ports never answer it. Wrong-port probes are capped at one attempt
+    // so a full hunt stays quick; a second pass covers the case where the
+    // real REPL port was still booting during the first.
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+        if (port) return
+        let ports = []
+        try { ports = await navigator.serial.getPorts() } catch (_) {}
+        const candidates = []
+        if (wanted && ports.includes(wanted)) candidates.push(wanted)
+        for (const p of ports) {
+            if (p !== wanted && matches(p)) candidates.push(p)
+        }
+
+        for (const candidate of candidates) {
+            if (port) return
+            const isKnown = candidate === wanted
+            await connectDevice('usb', {
+                existingSerialPort: candidate,
+                silent: true,
+                quietProbe: true,
+                probeAttempts: isKnown ? 3 : 1,
+            })
+            if (!port) continue  // open failed; next candidate
+
+            if (!probeEnabled || devInfo) {
+                lastReplSerialPort = null
+                return
+            }
+            if (isKnown && pass === MAX_PASSES - 1) {
+                // Last pass and this is the port the REPL was on before the
+                // flash: stay connected rather than ending up nowhere.
+                lastReplSerialPort = null
+                toastr.warning('Reconnected, but the REPL didn\'t answer yet — try Ctrl-C in the terminal, or click USB to reconnect.', 'Firmware updated')
+                return
+            }
+            await disconnectDevice()
+        }
+        await sleep(1500)
+    }
+    throw new Error('Couldn\'t find the MicroPython REPL port automatically. Click the USB button and pick the "JL Micropython REPL" port.')
 }
 
 async function rebootJumperlessIntoBootsel() {
@@ -4083,7 +4300,11 @@ async function rebootJumperlessIntoBootsel() {
     }
     const sp = await port.releaseStreams()
     // Remember the CDC identity so the in-browser flash flow can find the
-    // device again after it reboots into the new firmware.
+    // device again after it reboots into the new firmware. The SerialPort
+    // object itself is the strongest identity: Chrome returns the same
+    // instance after re-enumeration, and it's the only way to tell the
+    // REPL port apart from the device's other CDC ports (same VID/PID).
+    lastReplSerialPort = sp
     let serialInfo = null
     try { serialInfo = sp.getInfo ? sp.getInfo() : null } catch (_) {}
     // Drop our handle to the REPL port so onDisconnect doesn't fire spuriously.

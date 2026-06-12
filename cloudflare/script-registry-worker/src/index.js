@@ -69,6 +69,11 @@ export default {
             return new Response(null, { status: 204, headers: CORS_HEADERS })
         }
 
+        // Firmware CORS proxy — no KV needed, handle before the storage check.
+        if (new URL(request.url).pathname.split('/').filter(Boolean)[0] === 'fw-proxy') {
+            return await handleFirmwareProxy(request)
+        }
+
         try {
             if (!env.SCRIPTS) {
                 return err('Registry storage not configured', 503)
@@ -139,6 +144,59 @@ export default {
             return err(e.message || 'Internal error', 500)
         }
     },
+}
+
+// ─── Firmware CORS proxy ─────────────────────────────────────────────────────
+//
+// GET /fw-proxy?url=<encoded https URL>
+//
+// GitHub release-asset downloads don't send CORS headers, and the public
+// CORS proxies JumperIDE used to lean on keep dying (corsproxy.io went
+// paid, thingproxy's DNS is gone, allorigins 520s on multi-MB binaries…).
+// Streaming the bytes through our own worker removes that dependency.
+// Locked to GitHub hosts so this can't be abused as an open proxy.
+
+const FW_PROXY_ALLOWED_HOSTS = ['github.com', 'githubusercontent.com', 'api.github.com']
+const FW_PROXY_MAX_BYTES = 64 * 1024 * 1024  // sanity cap; biggest asset today is ~16 MB
+
+async function handleFirmwareProxy(request) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return err('Method not allowed', 405)
+    }
+    const target = new URL(request.url).searchParams.get('url')
+    if (!target) return err('Pass ?url=<encoded https URL>')
+
+    let parsed
+    try { parsed = new URL(target) }
+    catch { return err('Bad target URL') }
+
+    if (parsed.protocol !== 'https:') return err('Only https targets allowed')
+    if (!FW_PROXY_ALLOWED_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+        return err('Host not allowlisted', 403)
+    }
+
+    let upstream
+    try {
+        upstream = await fetch(parsed.toString(), {
+            method: request.method,
+            redirect: 'follow',
+            headers: { 'User-Agent': 'JumperIDE-firmware-proxy' },
+        })
+    } catch (e) {
+        return err(`Upstream fetch failed: ${e.message || e}`, 502)
+    }
+
+    const len = parseInt(upstream.headers.get('Content-Length') || '0', 10)
+    if (len > FW_PROXY_MAX_BYTES) return err('Asset too large', 413)
+
+    const headers = new Headers(CORS_HEADERS)
+    for (const k of ['Content-Type', 'Content-Length', 'ETag', 'Last-Modified']) {
+        const v = upstream.headers.get(k)
+        if (v) headers.set(k, v)
+    }
+    // Release assets are immutable per tag — let Cloudflare's edge cache them.
+    headers.set('Cache-Control', 'public, max-age=300')
+    return new Response(upstream.body, { status: upstream.status, headers })
 }
 
 async function handleList(env) {
