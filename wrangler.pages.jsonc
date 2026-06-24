@@ -1,0 +1,9 @@
+{
+  // Dedicated Cloudflare Pages config for the dev site (dev.ide.jumperless.org).
+  // Kept separate from the root wrangler.jsonc (the jumperscripts Worker) so
+  // `wrangler pages deploy --config wrangler.pages.jsonc` never picks up the
+  // Worker's `main`/`assets` fields. Used by .github/workflows/deploy-dev-cloudflare.yml.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jumperide-dev",
+  "pages_build_output_dir": "build"
+}

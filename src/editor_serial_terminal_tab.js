@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { displayOpenFile, createTab } from './editor_tabs.js'
 import { getTerminalOptions } from './terminal_utils.js'
+import { registerSerialSession } from './jumperless_ports.mjs'
 
 /** @type {Set<Function>} List of disconnect functions for all active terminal tabs. */
 const activeDisconnects = new Set()
@@ -92,6 +93,7 @@ export function createEditorSerialTerminalTab(tabName) {
 
     // WebSerial state
     let activePort = null
+    let lastPort = null
     let reader = null
     let writer = null
     let readableStreamClosed = null
@@ -165,6 +167,7 @@ export function createEditorSerialTerminalTab(tabName) {
         }
 
         activePort = port
+        lastPort = port
         const decoderStream = new TextDecoderStream()
         readableStreamClosed = port.readable.pipeTo(decoderStream.writable)
         reader = decoderStream.readable.getReader()
@@ -204,6 +207,13 @@ export function createEditorSerialTerminalTab(tabName) {
         btnConnect.disabled    = false
     }
 
+    // Flash coordination: let the flasher borrow this port during a flash.
+    const unregisterSession = registerSerialSession({
+        getPort: () => activePort,
+        disconnect: () => disconnect(),
+        reconnect: () => (lastPort ? connectToPort(lastPort) : Promise.resolve()),
+    })
+
     // Connect button: request a port from the browser, then connect
     btnConnect.addEventListener('click', async () => {
         if (connected) {
@@ -224,6 +234,7 @@ export function createEditorSerialTerminalTab(tabName) {
     // Clean up on tab close
     document.addEventListener('tabClosed', (event) => {
         if (event.detail.fn === tabName) {
+            unregisterSession()
             disconnect()
             innerTerm.dispose()
         }

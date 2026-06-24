@@ -3,6 +3,8 @@
  * No-account community: author name + description required; wiki-style edits; immutable history.
  */
 
+import { unzipSync, strFromU8 } from 'fflate'
+
 const INDEX_KEY = 'scripts:index'
 const IMAGES_INDEX_KEY = 'images:index'
 const MAX_NAME_LEN = 120
@@ -70,8 +72,17 @@ export default {
         }
 
         // Firmware CORS proxy — no KV needed, handle before the storage check.
-        if (new URL(request.url).pathname.split('/').filter(Boolean)[0] === 'fw-proxy') {
+        const firstSeg = new URL(request.url).pathname.split('/').filter(Boolean)[0]
+        if (firstSeg === 'fw-proxy') {
             return await handleFirmwareProxy(request)
+        }
+        // Wokwi project fetch (CORS proxy + unzip) — no KV needed.
+        if (firstSeg === 'wokwi') {
+            return await handleWokwiProject(request)
+        }
+        // Arduino cloud compile (pluggable backend) — no KV needed.
+        if (firstSeg === 'compile') {
+            return await handleCompile(request, env)
         }
 
         try {
@@ -197,6 +208,163 @@ async function handleFirmwareProxy(request) {
     // Release assets are immutable per tag — let Cloudflare's edge cache them.
     headers.set('Cache-Control', 'public, max-age=300')
     return new Response(upstream.body, { status: upstream.status, headers })
+}
+
+// ─── Wokwi project proxy ─────────────────────────────────────────────────────
+//
+// Wokwi's public API has no CORS headers, so the browser can't fetch it
+// directly. This proxies it and (for the full project) unzips so the client
+// gets clean { diagram, sketch, libraries, files } JSON.
+//
+//   GET /wokwi/:id              → { diagram, sketch, libraries, files: [{name,content}] }
+//   GET /wokwi/:id?part=diagram → { diagram }  (lightweight, for the poll loop)
+//
+// ":id" may be a bare project id or a full wokwi.com/projects/<id> URL.
+
+const WOKWI_ZIP_MAX_BYTES = 16 * 1024 * 1024
+
+function wokwiProjectId(raw) {
+    if (!raw) return null
+    const dec = decodeURIComponent(raw)
+    const m = dec.match(/(?:wokwi\.com\/(?:projects|api\/projects)\/)?([0-9]{6,25})/)
+    return m ? m[1] : null
+}
+
+async function handleWokwiProject(request) {
+    if (request.method !== 'GET') return err('Method not allowed', 405)
+
+    const url = new URL(request.url)
+    const segments = url.pathname.split('/').filter(Boolean) // ['wokwi', ':id']
+    const id = wokwiProjectId(segments[1])
+    if (!id) return err('Pass a Wokwi project id or URL: /wokwi/<id>')
+
+    // Lightweight path used by the wiring poll loop — just the diagram.
+    if (url.searchParams.get('part') === 'diagram') {
+        let r
+        try {
+            r = await fetch(`https://wokwi.com/api/projects/${id}/diagram.json`)
+        } catch (e) {
+            return err(`Wokwi fetch failed: ${e.message || e}`, 502)
+        }
+        if (!r.ok) return err(`Wokwi returned ${r.status} for diagram.json`, r.status === 404 ? 404 : 502)
+        let diagram
+        try { diagram = await r.json() } catch { return err('Wokwi diagram.json was not valid JSON', 502) }
+        return json({ id, diagram })
+    }
+
+    // Full project via ZIP (sketch.ino is 404 on the per-file API).
+    let zipResp
+    try {
+        zipResp = await fetch(`https://wokwi.com/api/projects/${id}/zip`)
+    } catch (e) {
+        return err(`Wokwi fetch failed: ${e.message || e}`, 502)
+    }
+    if (!zipResp.ok) return err(`Wokwi returned ${zipResp.status} for project zip`, zipResp.status === 404 ? 404 : 502)
+
+    const buf = new Uint8Array(await zipResp.arrayBuffer())
+    if (buf.length > WOKWI_ZIP_MAX_BYTES) return err('Project zip too large', 413)
+
+    let entries
+    try {
+        entries = unzipSync(buf)
+    } catch (e) {
+        return err(`Could not unzip project: ${e.message || e}`, 502)
+    }
+
+    // Source/library file types the compiler understands (everything else in the
+    // zip — wokwi-project.txt, diagram.json, wokwi.toml — is metadata we skip).
+    const SOURCE_RE = /\.(ino|pde|c|cc|cpp|cxx|h|hpp|hh|s)$/i
+
+    let diagram = null
+    let sketch = ''
+    let libraries = ''
+    const files = [] // non-sketch source/lib files — passed straight to the compiler
+
+    for (const [name, bytes] of Object.entries(entries)) {
+        if (name.endsWith('/')) continue
+        const base = name.split('/').pop()
+        const content = strFromU8(bytes)
+        if (base === 'diagram.json') {
+            try { diagram = JSON.parse(content) } catch { diagram = null }
+        } else if (base === 'sketch.ino') {
+            sketch = content
+        } else if (base === 'libraries.txt') {
+            libraries = content
+            files.push({ name: base, content })
+        } else if (SOURCE_RE.test(base)) {
+            files.push({ name: base, content })
+        }
+    }
+
+    return json({ id, diagram, sketch, libraries, files })
+}
+
+// ─── Arduino cloud compile (pluggable) ───────────────────────────────────────
+//
+//   POST /compile  body: { sketch, files?, board? }
+//   → { hex, eep, stdout, stderr }
+//
+// Forwards to env.COMPILER_URL (default Wokwi's build endpoint, which is the
+// same contract Wokwi's own editor uses). Swap COMPILER_URL to point at a
+// self-hosted compiler later — the request/response shape is identical.
+
+const DEFAULT_COMPILER_URL = 'https://wokwi.com/build'
+
+async function handleCompile(request, env) {
+    if (request.method !== 'POST') return err('Method not allowed', 405)
+
+    let body
+    try { body = await request.json() } catch { return err('Invalid JSON body') }
+
+    const sketch = typeof body.sketch === 'string' ? body.sketch : ''
+    if (!sketch.trim()) return err('sketch is required')
+    const files = Array.isArray(body.files) ? body.files : []
+    const board = typeof body.board === 'string' && body.board ? body.board : 'uno'
+
+    const compilerUrl = (env && env.COMPILER_URL) || DEFAULT_COMPILER_URL
+    const isWokwi = /(^|\.)wokwi\.com$/.test(new URL(compilerUrl).hostname)
+
+    let upstream
+    try {
+        upstream = await fetch(compilerUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Wokwi's build worker checks Origin/Referer; harmless for other backends.
+                ...(isWokwi ? { 'Origin': 'https://wokwi.com', 'Referer': 'https://wokwi.com/' } : {}),
+            },
+            body: JSON.stringify({ sketch, files, board }),
+        })
+    } catch (e) {
+        return err(`Compiler request failed: ${e.message || e}`, 502)
+    }
+
+    if (upstream.status === 502 || upstream.status === 503 || upstream.status === 504) {
+        return err('Build server is busy or unavailable; try again shortly', 503)
+    }
+
+    let result
+    try {
+        result = await upstream.json()
+    } catch {
+        return err('Compiler returned a non-JSON response', 502)
+    }
+
+    if (!result.hex) {
+        return json({
+            hex: '',
+            eep: result.eep || '',
+            stdout: result.stdout || '',
+            stderr: result.stderr || result.error || result.details || 'Compilation failed',
+        }, 200)
+    }
+
+    return json({
+        hex: result.hex,
+        eep: result.eep || '',
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+    })
 }
 
 async function handleList(env) {

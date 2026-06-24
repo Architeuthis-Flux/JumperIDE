@@ -56,11 +56,42 @@ import { faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFil
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
          faPen, faClockRotateLeft, faUpload,
          faChevronRight, faChevronDown, faGamepad, faDatabase,
-         faPlay, faPause, faBackwardStep, faForwardStep
+         faPlay, faPause, faBackwardStep, faForwardStep, faMicrochip, faTableColumns, faCode,
+         faBorderAll, faEllipsisVertical, faFloppyDisk
        } from '@fortawesome/free-solid-svg-icons'
 import { faMessage, faCircleDown } from '@fortawesome/free-regular-svg-icons'
 
 import { createEditorSerialTerminalTab, closeAllEditorSerialPorts } from './editor_serial_terminal_tab.js'
+import { openWokwiTab } from './wokwi_tab.js'
+import { openPortsDialog } from './jumperless_ports.mjs'
+import { toggleFloatingMode, isFloatingSupported, openLayoutMenu } from './windows.js'
+
+// Expose the Wokwi tab on window.app (HTML/menus call this).
+export { openWokwiTab }
+
+/** Open the Jumperless serial-port role override dialog (Settings + Wokwi tab). */
+export function openJumperlessPortsDialog() { return openPortsDialog() }
+
+/** Toggle the optional floating-windows overlay (toolbar button). */
+export function toggleFloatingWindows() {
+    const on = toggleFloatingMode()
+    const btn = QID('btn-floating-windows')
+    if (btn) btn.classList.toggle('active', on)
+}
+
+/** Open the floating-window layout preset menu (toolbar button). */
+export function openWindowLayoutMenu(event) {
+    openLayoutMenu(event?.currentTarget || QID('btn-window-layout'))
+}
+
+// Floating windows need a pointer + room; hide the toggles on touch/small screens.
+document.addEventListener('DOMContentLoaded', () => {
+    if (isFloatingSupported()) return
+    for (const id of ['btn-floating-windows', 'btn-window-layout']) {
+        const btn = QID(id)
+        if (btn) btn.style.display = 'none'
+    }
+})
 
 library.add(faUsb, faBluetoothB)
 library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, faFile, faFileCircleExclamation, faFileCode, faCubes, faGear,
@@ -69,7 +100,8 @@ library.add(faLink, faBars, faDownload, faCirclePlay, faCircleStop, faFolder, fa
          faTrashCan, faArrowsRotate, faPowerOff, faPlus, faMinus, faXmark, faCompress, faImage, faImages,
          faPen, faClockRotateLeft, faUpload,
          faChevronRight, faChevronDown, faGamepad, faDatabase,
-         faPlay, faPause, faBackwardStep, faForwardStep)
+         faPlay, faPause, faBackwardStep, faForwardStep, faMicrochip, faTableColumns, faCode,
+         faBorderAll, faEllipsisVertical, faFloppyDisk)
 library.add(faMessage, faCircleDown)
 dom.watch()
 
@@ -483,6 +515,35 @@ export async function createNewFile(path) {
             await _raw_updateFileTree(raw)
         })
     } catch (_err) { /* already reported */ }
+}
+
+/**
+ * Save a set of files into a folder on the connected Jumperless filesystem.
+ * Used by the Wokwi tab to stash a project (diagram.json + sketch.ino + README)
+ * on-device. Requires the MicroPython REPL connection (the file-tree `port`).
+ * @param {string} folderName subfolder under /wokwi (sanitized)
+ * @param {{name:string, content:string}[]} files
+ * @returns {Promise<string|null>} the folder path on success, else null
+ */
+export async function saveWokwiProjectToDevice(folderName, files) {
+    if (!port) {
+        toastr.info('Connect to the Jumperless over USB first (to save on-device)')
+        return null
+    }
+    const safe = String(folderName || 'project').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 40) || 'project'
+    const dir = `/wokwi/${safe}`
+    let ok = false
+    await _withRawRetry('Saving Wokwi project', async (raw) => {
+        await raw.makePath(dir)
+        for (const f of files) {
+            if (!f || !f.name) continue
+            const base = String(f.name).replace(/[^A-Za-z0-9._-]+/g, '_')
+            await raw.writeFile(`${dir}/${base}`, f.content ?? '')
+        }
+        await _raw_updateFileTree(raw)
+        ok = true
+    })
+    return ok ? dir : null
 }
 
 /**

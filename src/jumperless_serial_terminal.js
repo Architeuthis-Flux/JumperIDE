@@ -10,6 +10,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { QID, QS } from './utils.js'
 import { getTerminalOptions } from './terminal_utils.js'
+import { registerSerialSession } from './jumperless_ports.mjs'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,8 @@ let fitAddon = null
 let termOpened = false
 /** @type {SerialPort|null} */
 let activePort = null
+/** Last port we successfully connected to (for reconnect-after-flash). */
+let lastConnectedPort = null
 /** @type {ReadableStreamDefaultReader|null} */
 let reader = null
 /** @type {WritableStreamDefaultWriter|null} */
@@ -155,6 +158,7 @@ async function connectToPort(port) {
     }
 
     activePort = port
+    lastConnectedPort = port
 
     const decoderStream   = new TextDecoderStream()
     readableStreamClosed  = port.readable.pipeTo(decoderStream.writable)
@@ -272,6 +276,13 @@ export function createPort1EditorTab() {
             term.options.fontSize = Math.min(48, term.options.fontSize + 1)
             try { fitAddon.fit() } catch (_) {}
         }
+    })
+
+    // ── Flash coordination: let the flasher borrow this port during a flash ──
+    registerSerialSession({
+        getPort: () => activePort,
+        disconnect: () => disconnect(false),
+        reconnect: () => (lastConnectedPort ? connectToPort(lastConnectedPort) : Promise.resolve()),
     })
 
     // ── 6. Connect / Disconnect button ───────────────────────────────────────

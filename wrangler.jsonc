@@ -12,6 +12,12 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  // Pluggable Arduino compile backend used by POST /compile. Defaults to Wokwi's
+  // build endpoint (same contract Wokwi's editor uses); point this at a
+  // self-hosted compiler later without touching code.
+  "vars": {
+    "COMPILER_URL": "https://wokwi.com/build"
+  },
   "kv_namespaces": [
     {
       "binding": "SCRIPTS",

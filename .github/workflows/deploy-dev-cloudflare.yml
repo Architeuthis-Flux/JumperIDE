@@ -1,0 +1,64 @@
+# Build JumperIDE and deploy to Cloudflare Pages (dev site).
+#
+# Serves dev.ide.jumperless.org from a Cloudflare Pages project, separate from
+# the production GitHub Pages site (static.yml). Mirrors the prod build exactly
+# (python3 build.py), then publishes ./build with wrangler.
+#
+# One-time setup (done in the Cloudflare dashboard, not here):
+#   1. Create a Pages project named "jumperide-dev" (Direct Upload / no Git
+#      connection — this workflow uploads the build).
+#   2. Pages project → Custom domains → add "dev.ide.jumperless.org".
+#      Since jumperless.org DNS is on Cloudflare, the CNAME is created for you.
+#   3. Repo → Settings → Secrets and variables → Actions, add:
+#        CLOUDFLARE_API_TOKEN   (token with "Cloudflare Pages: Edit" permission)
+#        CLOUDFLARE_ACCOUNT_ID  (your account id)
+#
+# Trigger: push to the `dev` branch, or run manually.
+name: Build and deploy dev to Cloudflare Pages
+
+on:
+  push:
+    branches: ["dev"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "cloudflare-pages-dev"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build dependency
+        run: pip install requests
+
+      - name: Build
+        env:
+          SKIP_API_REF_GENERATE: "1"
+        run: python3 build.py
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Use the dedicated Pages config (project name + output dir) so the root
+          # wrangler.jsonc (the Worker config) is never used for this upload.
+          command: pages deploy --config wrangler.pages.jsonc --branch=dev

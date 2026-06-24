@@ -51,6 +51,8 @@ fs.copyFileSync('src/image2oled.css',  'build/image2oled.css')
 fs.copyFileSync('src/oled_images_browse.html', 'build/oled_images_browse.html')
 fs.copyFileSync('src/oled_images_browse.js',   'build/oled_images_browse.js')
 fs.copyFileSync('src/app_common.css',  'build/app_common.css')
+// Self-host the clang-format WASM used by the Wokwi sketch formatter.
+fs.copyFileSync('node_modules/@wasm-fmt/clang-format/clang-format.wasm', 'build/clang-format.wasm')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')
 }

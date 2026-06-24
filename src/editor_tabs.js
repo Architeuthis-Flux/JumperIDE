@@ -1,5 +1,6 @@
 import { addUpdateHandler } from './editor.js'
 import { QSA, QS, QID } from './utils.js'
+import { openPanelWindow, isPanelWindowOpen, closePanelWindow } from './windows.js'
 
 
 let currentTab = 0
@@ -46,6 +47,9 @@ export function createTab(fn) {
         'beforeend',
         `<div class="tab active" data-tab="${currentTab}" data-fn="${fn}"" draggable="true">
             <span class="tab-title">${fn}</span>
+            <a class="menu-action tab-popout" title="Pop out into a floating window">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+            </a>
             <a class="menu-action" title="Close">
                 <i class="fa-solid fa-xmark"></i>
             </a>
@@ -70,6 +74,12 @@ export function createTab(fn) {
     }
     closeButton.addEventListener("click", close_tab)
     editorTabElement.addEventListener("auxclick", close_tab)
+
+    const popoutButton = editorTabElement.querySelector(".tab-popout")
+    popoutButton.addEventListener("click", (event) => {
+        event.stopPropagation()
+        _popOutTab(editorTabElement)
+    })
 
     const editorTabTitle = editorTabElement.querySelector(".tab-title")
     editorTabTitle.textContent = fn.split("/").pop()
@@ -166,6 +176,40 @@ function _closeTab(index) {
 }
 
 
+/**
+ * Pop a tab's editor pane out into a floating WinBox window. The tab button is
+ * hidden while floating; closing the window restores the pane to its original
+ * spot (via NodeAnchor) and re-shows the tab.
+ * @param {HTMLElement} tabElement
+ */
+function _popOutTab(tabElement) {
+    const index = tabElement.dataset.tab
+    const fn = tabElement.dataset.fn || index
+    const key = `tab:${fn}`
+    if (isPanelWindowOpen(key)) { closePanelWindow(key); return }
+
+    const pane = QS(`.editor-tab-pane[data-pane="${index}"]`)
+    if (!pane) return
+
+    // Activate a sibling so the docked editor area isn't left blank.
+    let sib = tabElement.nextElementSibling
+    if (!sib || sib.dataset.new || sib.dataset.newMenu) sib = tabElement.previousElementSibling
+    tabElement.style.display = 'none'
+    if (sib && sib.dataset.tab) _activateTab(sib.dataset.tab)
+
+    const title = tabElement.querySelector('.tab-title')?.textContent || 'Tab'
+    const reflow = () => { try { window.dispatchEvent(new Event('resize')) } catch (_) {} }
+    openPanelWindow(key, {
+        title,
+        node: pane,
+        width: '50%',
+        height: '60%',
+        onReflow: reflow,
+        onRestore: () => { tabElement.style.display = ''; _activateTab(index) },
+    })
+}
+
+
 function _activateTab(index) {
     // Tab may now be in either the editor tabs bar or the terminal tabs bar
     const tabElement = QS(`#editor-tabs .tab[data-tab="${index}"]`)
@@ -223,6 +267,7 @@ function _addNewFileButton() {
         <a class="new-tab-menu-item" id="ntm-terminal" href="#"><i class="fa-solid fa-terminal fa-fw"></i> Terminal</a>
         <a class="new-tab-menu-item ${connected ? '' : 'ntm-disabled'}" id="ntm-file" href="#"><i class="fa-solid fa-file fa-fw"></i> File</a>
         <a class="new-tab-menu-item" id="ntm-image" href="#"><i class="fa-solid fa-image fa-fw"></i> Image</a>
+        <a class="new-tab-menu-item" id="ntm-wokwi" href="#"><i class="fa-solid fa-microchip fa-fw"></i> Wokwi</a>
     `
     document.body.appendChild(menu)
 
@@ -272,6 +317,12 @@ function _addNewFileButton() {
         e.preventDefault()
         closeMenu()
         window.app?.createNewOledBitmap?.()
+    })
+
+    menu.querySelector('#ntm-wokwi').addEventListener('click', (e) => {
+        e.preventDefault()
+        closeMenu()
+        window.app?.openWokwiTab?.()
     })
 }
 

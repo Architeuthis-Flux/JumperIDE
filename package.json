@@ -7,6 +7,7 @@
     "build": "rollup --config",
     "start": "rollup --config --configDebug --watch",
     "check:api-ref": "node scripts/check-api-ref-data.js",
+    "test": "node scripts/wokwi.test.mjs && node scripts/ports.test.mjs && node scripts/windows.test.mjs && node scripts/clang_format.test.mjs",
     "deploy": "npm run build && wrangler deploy",
     "preview": "npm run build && wrangler dev"
   },
@@ -25,11 +26,14 @@
     "@pybricks/mpy-cross-v6": "github:code4fukui/mpy-cross-v6",
     "@uiw/codemirror-theme-material": "^4.23.10",
     "@uiw/codemirror-theme-monokai": "^4.23.10",
+    "@wasm-fmt/clang-format": "^22.1.8",
+    "@wokwi/client": "^0.26.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "codemirror": "^6.0.1",
     "esptool-js": "^0.6.0",
+    "fflate": "^0.8.3",
     "github-fork-ribbon-css": "^0.2.3",
     "i18next": "^24.2.2",
     "i18next-browser-languagedetector": "^8.0.4",
@@ -37,7 +41,9 @@
     "peerjs": "^1.5.4",
     "toastr": "^2.1.4",
     "ua-parser-js": "^2.0.2",
-    "web-serial-polyfill": "^1.0.15"
+    "web-serial-polyfill": "^1.0.15",
+    "webserial-flasher": "^1.0.1",
+    "winbox": "^0.2.82"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",

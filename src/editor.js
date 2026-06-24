@@ -12,6 +12,7 @@ import { EditorState, RangeSetBuilder, Prec, StateEffect, StateField } from '@co
 import { StreamLanguage, indentUnit, syntaxTree } from '@codemirror/language'
 import { indentWithTab } from '@codemirror/commands'
 import { python, pythonLanguage } from '@codemirror/lang-python'
+import { cpp } from '@codemirror/legacy-modes/mode/clike'
 import { completeFromList } from '@codemirror/autocomplete'
 import { json as modeJSON, jsonParseLinter } from '@codemirror/lang-json'
 import { markdown as modeMD } from '@codemirror/lang-markdown'
@@ -711,6 +712,26 @@ function underline(color) {
              `width="6" height="3"`)
 }
 
+// Shared Monokai theme so the main editor and lightweight code editors (e.g.
+// the Wokwi sketch / diagram panes) render identically. Computed once.
+const sharedMonokaiTheme = monokaiInit({
+  settings: {
+    fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace',
+    background: 'var(--bg-color-edit)',
+    gutterBackground: 'var(--bg-color-edit)',
+  },
+  styles: [
+    {
+      tag: [tags.name, tags.deleted, tags.character, tags.macroName],
+      color: 'white'
+    }, {
+      tag: [tags.meta, tags.comment],
+      color: '#afac99',
+      fontStyle: 'italic',
+    }
+  ]
+})
+
 const extraTheme = EditorView.theme({
   ".cm-content": {
     borderLeft: "1px solid var(--bg-color)",
@@ -805,24 +826,7 @@ export async function createNewEditor(editorElement, fn, content, options) {
                 basicSetup,
                 //closedText: '▶',
                 //openText: '▼',
-                monokaiInit({
-                    settings: {
-                        fontFamily: '"Hack", "Droid Sans Mono", "monospace", monospace',
-                        background: 'var(--bg-color-edit)',
-                        gutterBackground: 'var(--bg-color-edit)',
-                    },
-                    styles: [
-                        {
-                            tag: [tags.name, tags.deleted, tags.character, tags.macroName],
-                            color: 'white'
-                        }, {
-                            tag: [tags.meta, tags.comment],
-                            color: '#afac99',
-                            fontStyle: 'italic',
-                            //fontWeight: '300',
-                        }
-                    ]
-                }),
+                sharedMonokaiTheme,
                 keymap.of([indentWithTab]),
                 mode,
                 linkCommentExtensions,
@@ -843,6 +847,40 @@ export async function createNewEditor(editorElement, fn, content, options) {
  */
 export function getEditorFromElement(element) {
   return EditorView.findFromDOM(element)
+}
+
+
+/**
+ * Lightweight standalone CodeMirror editor for embedded panes (e.g. the Wokwi
+ * Arduino sketch + diagram.json viewers). Shares the main editor's Monokai
+ * theme and basic setup but skips the Jumperless/Python-specific extensions.
+ *
+ * @param {HTMLElement} parent Element to mount the editor into
+ * @param {{doc?:string, language?:'cpp'|'json', readOnly?:boolean, wordWrap?:boolean}} [opts]
+ * @returns {EditorView}
+ */
+export function createCodeEditor(parent, { doc = '', language = 'cpp', readOnly = false, wordWrap = false } = {}) {
+  const langExt = language === 'json' ? [modeJSON()] : [StreamLanguage.define(cpp)]
+  const extensions = [
+    basicSetup,
+    sharedMonokaiTheme,
+    keymap.of([indentWithTab]),
+    langExt,
+    extraTheme,
+  ]
+  if (wordWrap) extensions.push(EditorView.lineWrapping)
+  if (readOnly) extensions.push(EditorState.readOnly.of(true))
+  return new EditorView({ parent, state: EditorState.create({ doc, extensions }) })
+}
+
+/** Read the full text of a CodeMirror EditorView. */
+export function getEditorValue(view) {
+  return view.state.doc.toString()
+}
+
+/** Replace the full text of a CodeMirror EditorView. */
+export function setEditorValue(view, text) {
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text ?? '' } })
 }
 
 

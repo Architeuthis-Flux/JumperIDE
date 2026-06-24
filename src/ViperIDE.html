@@ -40,6 +40,8 @@
             </span>
             <button title="Connect a Jumperless or other MicroPython device over USB. Click again to disconnect." onclick="app.connectDevice('usb')" id="btn-conn-usb"><i class="fa-brands fa-usb"></i></button>
             <button title="Show/hide the API Reference panel — searchable docs for MicroPython and the Jumperless API" onclick="app.toggleApiRefPanel()" id="btn-api-ref"><i class="fa-solid fa-book"></i></button>
+            <button title="Toggle floating windows — pop the file tree, editor, and docs out into movable, resizable windows" onclick="app.toggleFloatingWindows()" id="btn-floating-windows"><i class="fa-solid fa-table-columns"></i></button>
+            <button title="Arrange floating windows — tile them 2-up, in columns, or a grid" onclick="app.openWindowLayoutMenu(event)" id="btn-window-layout"><i class="fa-solid fa-border-all"></i></button>
             <button title="Toggle full-screen mode for the whole IDE" onclick="app.toggleFullScreen('app')"  id="app-expand"><i class="fa-solid fa-expand"></i></button>
         </div>
     </div>
@@ -190,6 +192,10 @@
                     <div class="firmware-update-actions">
                         <button type="button" class="firmware-update-btn jumperless" title="Re-poll the Jumperless release feed and toast the latest version" onclick="app.checkFirmwareForKind('jumperless')">Check for updates</button>
                         <button type="button" class="firmware-update-btn jumperless" title="Open the Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless')">Flash Jumperless…</button>
+                    </div>
+                    <div class="title-lines" id="menu-line-jumperless-ports">jumperless serial ports</div>
+                    <div title="Choose which Jumperless USB serial interface is used for the Wokwi command (W) port and for Arduino flashing. Matched by interface number so it survives Windows COM-port reordering; override here if the wrong port is picked.">
+                        <button type="button" id="jumperless-ports-btn" title="Assign which serial port is used for commands and for flashing" onclick="app.openJumperlessPortsDialog()">Configure ports…</button>
                     </div>
 
                     <div class="title-lines" id="menu-line-firmware-badge">replay badge firmware</div>
