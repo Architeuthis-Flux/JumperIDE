@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "../Jumperless"
+		},
+		{
+			"path": "../JumperlOS"
+		},
+		{
+			"path": "../JumperlessV5"
+		},
+		{
+			"path": "../Jumperless-docs"
+		},
+		{
+			"path": "../Jumperless-App"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}

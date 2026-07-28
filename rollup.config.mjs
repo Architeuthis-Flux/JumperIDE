@@ -51,6 +51,9 @@ fs.copyFileSync('src/image2oled.css',  'build/image2oled.css')
 fs.copyFileSync('src/oled_images_browse.html', 'build/oled_images_browse.html')
 fs.copyFileSync('src/oled_images_browse.js',   'build/oled_images_browse.js')
 fs.copyFileSync('src/app_common.css',  'build/app_common.css')
+// Self-host the Ruff linter WASM: it must be version-locked to the bundled
+// @astral-sh/ruff-wasm-web glue (the copy hosted on viper-ide.org drifts).
+fs.copyFileSync('node_modules/@astral-sh/ruff-wasm-web/ruff_wasm_bg.wasm', 'build/ruff_wasm_bg.wasm')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')
 }

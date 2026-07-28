@@ -111,7 +111,7 @@ export const API_REF_HEADINGS = [
   "file.tell()",
   "file.size()",
   "file.available()",
-  "file.name",
+  "file.name()",
   "help()",
   "nodes_help()"
 ]
@@ -216,14 +216,14 @@ export const API_REF_DESCRIPTIONS = {
   "jfs.stat": "Get status of a file or directory.",
   "jfs.info": "Get information about the filesystem.",
   "jfs.open": "Open a file and return a corresponding file object.",
-  "file.read": "Read `size` bytes from the file. If `size` is omitted or negative, the entire file is read.",
+  "file.read": "Read `size` bytes from the file. If `size` is omitted, reads from the current position to the end of the file. Reads are capped at 8192 bytes per call, so loop if you're reading a file bigger than 8 KB.",
   "file.write": "Write the given string or bytes `data` to the file. Returns the number of bytes written.",
   "file.close": "Close the file. A closed file cannot be read or written to.",
   "file.seek": "Change the stream position.",
   "file.tell": "Return the current stream position.",
   "file.size": "Return the total size of the file in bytes.",
   "file.available": "Return the number of bytes available to be read from the current position to the end of the file.",
-  "file.name": "Returns the name of the file.",
+  "file.name": "Returns the name of the file. (It's a method call, not an attribute - `f.name` gives you the bound method, not the string.)",
   "help": "Displays a comprehensive list of all available functions and constants in the `jumperless` module.",
   "nodes_help": "Displays a detailed reference for all available node names and their aliases."
 }

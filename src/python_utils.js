@@ -189,8 +189,12 @@ export async function getToolsVM() {
 export async function getRuffWorkspace() {
     if (_ruff_wspace) { return _ruff_wspace }
     try {
+        // Self-hosted (rollup copies it to build/ruff_wasm_bg.wasm): the .wasm
+        // MUST be version-locked to the bundled @astral-sh/ruff-wasm-web JS glue.
+        // Fetching it from viper-ide.org broke every .py file open ("blank tab")
+        // when upstream updated their hosted copy to an incompatible version.
         await ruffInit({
-            module_or_path: `${BASE_URL}/assets/ruff_wasm_bg.wasm`,
+            module_or_path: new URL('ruff_wasm_bg.wasm', document.baseURI),
         })
         console.log('Ruff', RuffWorkspace.version())
         const settings = RuffWorkspace.defaultSettings()
@@ -235,6 +239,7 @@ with open('/tmp/file.min.py', 'w') as f:
 
 export async function prettifyPython(buffer) {
     const ruff = await getRuffWorkspace()
+    if (!ruff) { throw new Error('Ruff failed to load - cannot prettify') }
     return ruff.format(buffer)
 }
 

@@ -767,7 +767,10 @@ export async function createNewEditor(editorElement, fn, content, options) {
             indentUnit.of('    '), python(),
             pythonLanguage.data.of({ autocomplete: jumperlessCompletionSource }),
             jumperlessPythonExtensions,
-            ruff && ruffLinter(ruff),
+            // A falsy value in the extensions array makes EditorState.create throw
+            // ("Unrecognized extension value"), killing the whole editor - so a
+            // Ruff load failure must degrade to "no linting", not "blank dead tab"
+            ruff ? ruffLinter(ruff) : [],
             mpyCrossLinter,
         ]
     } else if (fn.endsWith('.mpy.dis')) {
