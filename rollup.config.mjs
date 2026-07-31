@@ -54,6 +54,10 @@ fs.copyFileSync('src/app_common.css',  'build/app_common.css')
 // Self-host the Ruff linter WASM: it must be version-locked to the bundled
 // @astral-sh/ruff-wasm-web glue (the copy hosted on viper-ide.org drifts).
 fs.copyFileSync('node_modules/@astral-sh/ruff-wasm-web/ruff_wasm_bg.wasm', 'build/ruff_wasm_bg.wasm')
+// Same story for mpy-cross: the wasm must match the bundled
+// @pybricks/mpy-cross-v6 JS glue. The viper-ide.org copy drifted on
+// 2026-07-31 and broke WebAssembly.instantiate (Import #0 "env" mismatch).
+fs.copyFileSync('node_modules/@pybricks/mpy-cross-v6/build/mpy-cross-v6.wasm', 'build/mpy-cross-v6.wasm')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')
 }

@@ -5,6 +5,12 @@ import ruffInit, { Workspace as RuffWorkspace } from '@astral-sh/ruff-wasm-web'
 
 const BASE_URL = 'https://viper-ide.org';
 
+// Self-hosted (rollup copies it to build/mpy-cross-v6.wasm): the .wasm MUST be
+// version-locked to the bundled @pybricks/mpy-cross-v6 JS glue. Fetching it
+// from viper-ide.org broke linting/compiling ("Import #0 env: module is not an
+// object or function") when upstream updated their hosted copy.
+const MPY_CROSS_V6_WASM_URL = () => new URL('mpy-cross-v6.wasm', document.baseURI).href
+
 export function parseStackTrace(stackTrace)
 {
     const lines = stackTrace.split('\n');
@@ -56,7 +62,7 @@ export async function validatePython(filename, content, devInfo) {
     // Ideally we want ti init the wasm file once and then reuse the instance multiple times
     try {
         const [_, fname] = splitPath(filename)
-        const wasmUrlV6 = `${BASE_URL}/assets/mpy-cross-v6.wasm`
+        const wasmUrlV6 = MPY_CROSS_V6_WASM_URL()
         let options = null
         if (devInfo && devInfo.mpy_arch) {
             options = [ "-march="+devInfo.mpy_arch ]
@@ -83,7 +89,7 @@ export async function compilePython(filename, content, devInfo) {
         content = codec.decode(content)
     }
     const [_, fname] = splitPath(filename)
-    const wasmUrlV6 = `${BASE_URL}/assets/mpy-cross-v6.wasm`
+    const wasmUrlV6 = MPY_CROSS_V6_WASM_URL()
     let options = null
 
     if (devInfo) {
