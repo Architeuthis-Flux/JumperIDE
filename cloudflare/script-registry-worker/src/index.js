@@ -62,8 +62,37 @@ async function checkRateLimit(env, ip, method) {
     return null
 }
 
+/**
+ * Tell GitHub the registry changed so the "Sync registry scripts" workflow
+ * runs immediately instead of waiting for its daily fallback cron.
+ * Requires two Worker settings (no-op when absent, so dev setups keep working):
+ *   - GITHUB_REPO var in wrangler.toml, e.g. "Architeuthis-Flux/JumperIDE"
+ *   - GITHUB_DISPATCH_TOKEN secret: fine-grained PAT with Contents read/write
+ *     on that repo (npx wrangler secret put GITHUB_DISPATCH_TOKEN)
+ * Fire-and-forget via waitUntil so API responses are never delayed by GitHub.
+ */
+function notifyRegistryChanged(env, ctx) {
+    if (!env.GITHUB_DISPATCH_TOKEN || !env.GITHUB_REPO) return
+    ctx.waitUntil(
+        fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${env.GITHUB_DISPATCH_TOKEN}`,
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'jumperide-script-registry',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ event_type: 'registry-updated' }),
+        }).then((res) => {
+            if (!res.ok) console.error('repository_dispatch failed:', res.status)
+        }).catch((e) => {
+            console.error('repository_dispatch failed:', e)
+        })
+    )
+}
+
 export default {
-    async fetch(request, env, _ctx) {
+    async fetch(request, env, ctx) {
         // Always return CORS so browser doesn't block; OPTIONS preflight
         if (request.method === 'OPTIONS') {
             return new Response(null, { status: 204, headers: CORS_HEADERS })
@@ -133,10 +162,14 @@ export default {
                 return await handleGetRevision(id, revId, env)
             }
             if (request.method === 'POST' && !id) {
-                return await handleCreate(request, env)
+                const res = await handleCreate(request, env)
+                if (res.ok) notifyRegistryChanged(env, ctx)
+                return res
             }
             if (request.method === 'PUT' && id && !sub) {
-                return await handleUpdate(id, request, env)
+                const res = await handleUpdate(id, request, env)
+                if (res.ok) notifyRegistryChanged(env, ctx)
+                return res
             }
             return err('Not found', 404)
         } catch (e) {

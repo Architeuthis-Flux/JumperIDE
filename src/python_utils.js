@@ -3,8 +3,6 @@ import { splitPath } from './utils.js'
 import { TarReader } from '@gera2ld/tarjs'
 import ruffInit, { Workspace as RuffWorkspace } from '@astral-sh/ruff-wasm-web'
 
-const BASE_URL = 'https://viper-ide.org';
-
 // Self-hosted (rollup copies it to build/mpy-cross-v6.wasm): the .wasm MUST be
 // version-locked to the bundled @pybricks/mpy-cross-v6 JS glue. Fetching it
 // from viper-ide.org broke linting/compiling ("Import #0 env: module is not an
@@ -180,14 +178,16 @@ export async function loadVFS(vm, url) {
 export async function getToolsVM() {
     if (_tools_vm) { return _tools_vm }
 
+    // Self-hosted: the wasm must match the micropython.mjs glue loaded by the
+    // HTML pages; both come from the same npm package (see rollup.config.mjs).
     _tools_vm = await loadMicroPython({
         pystack: 64 * 1024,
         heapsize: 32 * 1024 * 1024,
-        url: `${BASE_URL}/assets/micropython.wasm`,
+        url: new URL('micropython.wasm', document.baseURI).href,
         //stdout: (data) => { console.log(data) },
     })
 
-    await loadVFS(_tools_vm, `${BASE_URL}/assets/tools_vfs.tar.gz`)
+    await loadVFS(_tools_vm, new URL('tools_vfs.tar.gz', document.baseURI).href)
 
     return _tools_vm
 }

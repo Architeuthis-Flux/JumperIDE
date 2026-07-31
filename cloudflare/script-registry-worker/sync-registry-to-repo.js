@@ -55,6 +55,14 @@ async function main() {
         // no manifest yet
     }
 
+    // Snapshot of the registry index (id → updatedAt) at sync time. The CI
+    // workflow compares this against the live index to decide whether a
+    // scheduled run can skip the sync entirely.
+    const index = {}
+    for (const entry of list) {
+        index[entry.id] = entry.updatedAt || ''
+    }
+
     const existingFiles = new Set(Object.values(idToFile))
 
     for (const entry of list) {
@@ -80,7 +88,7 @@ async function main() {
         console.log('  wrote', filename)
     }
 
-    fs.writeFileSync(MANIFEST_PATH, JSON.stringify({ idToFile, fileMeta }, null, 2) + '\n', 'utf8')
+    fs.writeFileSync(MANIFEST_PATH, JSON.stringify({ idToFile, fileMeta, index }, null, 2) + '\n', 'utf8')
     console.log('Synced', list.length, 'script(s) to', SCRIPTS_DIR)
 }
 

@@ -3153,14 +3153,17 @@ async function checkForUpdates() {
     QID('viper-ide-version').innerHTML = current_version
     QID('viper-ide-build').innerText = 'build ' + getBuildDate()
 
+    // Compare against our own deployment's manifest (rollup injects `version`
+    // at build time). Polling viper-ide.org here made the fork nag about
+    // upstream ViperIDE releases it can't actually update to.
     let manifest;
     try {
-        manifest = await fetchJSON('https://viper-ide.org/manifest.json')
+        manifest = await fetchJSON(new URL('manifest.json', document.baseURI).href)
     } catch {
         return
     }
-    if (current_version.localeCompare(manifest.version, undefined, {numeric: true, sensitivity: "base"}) < 0) {
-        toastr.info(`New ViperIDE version ${manifest.version} is available`)
+    if (manifest.version && current_version.localeCompare(manifest.version, undefined, {numeric: true, sensitivity: "base"}) < 0) {
+        toastr.info(`New JumperIDE version ${manifest.version} is available`)
         QID('viper-ide-version').innerHTML = `${current_version} (<a href="javascript:app.updateApp()">update</a>)`
 
         // Automatically show about page

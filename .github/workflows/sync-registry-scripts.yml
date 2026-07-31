@@ -1,38 +1,86 @@
 # Pull scripts from the registry into the repo and commit so you can see/edit them locally.
-# Runs on schedule and can be triggered manually (Actions → Sync registry scripts → Run workflow).
+#
+# Triggers:
+#   - repository_dispatch "registry-updated": sent by the registry worker the
+#     moment a script is created/edited/deleted (see cloudflare/script-registry-worker).
+#   - Daily cron: safety net in case a dispatch was lost or the worker secret
+#     isn't configured. Scheduled runs first do a cheap index comparison and
+#     skip checkout/sync entirely when the registry hasn't changed.
+#   - Manual (Actions → Sync registry scripts → Run workflow): always syncs.
 name: Sync registry scripts
 
 on:
+  repository_dispatch:
+    types: [registry-updated]
   schedule:
-    # Every 6 hours
-    - cron: "0 */6 * * *"
+    # Daily fallback; the worker's repository_dispatch is the primary trigger
+    - cron: "17 13 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write  # read + push commits
 
+concurrency:
+  group: sync-registry-scripts
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      # Scheduled runs only: compare the live registry index (id → updatedAt)
+      # with the snapshot committed in scripts/.registry-sync.json. No checkout
+      # needed — the committed manifest is fetched via the GitHub API.
+      - name: Check whether registry changed
+        id: gate
+        if: github.event_name == 'schedule'
+        env:
+          REGISTRY_URL: "https://jumperscripts.kevinc-af9.workers.dev"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANIFEST_PATH: cloudflare/script-registry-worker/scripts/.registry-sync.json
+        run: |
+          cat > /tmp/gate.mjs <<'EOF'
+          import fs from 'node:fs'
+
+          const regRes = await fetch(process.env.REGISTRY_URL + '/scripts')
+          if (!regRes.ok) throw new Error(`Registry fetch failed: ${regRes.status}`)
+          const reg = await regRes.json()
+          const live = Object.fromEntries((reg.scripts || []).map(s => [s.id, s.updatedAt || '']))
+
+          const manRes = await fetch(
+            `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/contents/${process.env.MANIFEST_PATH}?ref=${process.env.GITHUB_REF_NAME}`,
+            { headers: {
+                'Authorization': `Bearer ${process.env.GH_TOKEN}`,
+                'Accept': 'application/vnd.github.raw+json',
+                'User-Agent': 'sync-registry-gate',
+            } }
+          )
+          // Missing manifest or missing index field (pre-upgrade manifest) → sync.
+          const committed = manRes.ok ? (await manRes.json()).index : null
+
+          const key = (o) => JSON.stringify(Object.entries(o).sort())
+          const changed = !committed || key(live) !== key(committed)
+          console.log('live scripts:', Object.keys(live).length,
+                      '| committed snapshot:', committed ? Object.keys(committed).length : 'none',
+                      '| changed:', changed)
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed}\n`)
+          EOF
+          node /tmp/gate.mjs
+
       - name: Checkout
+        if: github.event_name != 'schedule' || steps.gate.outputs.changed == 'true'
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
 
       - name: Set up Node.js
+        if: github.event_name != 'schedule' || steps.gate.outputs.changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Check registry response
-        run: |
-          echo "Registry script count:"
-          curl -s "https://jumperscripts.kevinc-af9.workers.dev/scripts" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(Array.isArray(d.scripts) ? d.scripts.length + ' scripts' : 'unexpected: ' + JSON.stringify(d).slice(0,120));"
-
       - name: Sync registry to repo
-        id: sync
+        if: github.event_name != 'schedule' || steps.gate.outputs.changed == 'true'
         env:
           REGISTRY_URL: "https://jumperscripts.kevinc-af9.workers.dev"
         run: |
@@ -41,6 +89,7 @@ jobs:
           ls -la cloudflare/script-registry-worker/scripts/ || true
 
       - name: Commit and push if changed
+        if: github.event_name != 'schedule' || steps.gate.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

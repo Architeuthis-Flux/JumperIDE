@@ -55,8 +55,19 @@ node sync-registry-to-repo.js
 Or from repo root: `node cloudflare/script-registry-worker/sync-registry-to-repo.js`
 
 - Uses `REGISTRY_URL` from the environment if set (default: `https://jumperscripts.kevinc-af9.workers.dev`).
-- Writes each script to `scripts/<name>.py` and stores a `.registry-sync.json` manifest (id → filename, and per-file description/author for push).
-- **Automatic:** The GitHub Action "Sync registry scripts" runs every 6 hours and on manual trigger (Actions tab); it runs this sync and commits changes so uploaded scripts appear in the repo.
+- Writes each script to `scripts/<name>.py` and stores a `.registry-sync.json` manifest (id → filename, per-file description/author for push, and an `index` snapshot of id → updatedAt used by CI to detect changes).
+- **Automatic:** The GitHub Action "Sync registry scripts" runs:
+  - immediately when the worker sends a `repository_dispatch` event on script create/edit/delete (requires the token below);
+  - on a daily fallback cron — scheduled runs compare the registry index against the committed manifest and skip the sync when nothing changed;
+  - on manual trigger (Actions tab), which always syncs.
+
+**Instant sync setup (one-time):** the worker notifies GitHub when a script changes.
+
+1. Create a fine-grained PAT scoped to this repo with **Contents: Read and write** permission (that's the scope `repository_dispatch` requires).
+2. `cd cloudflare/script-registry-worker && npx wrangler secret put GITHUB_DISPATCH_TOKEN` and paste the token.
+3. `npx wrangler deploy` (the target repo is the `GITHUB_REPO` var in `wrangler.toml`).
+
+Without the secret the worker skips the notification and the daily cron still keeps the repo in sync.
 
 **Repo → registry (publish your edits)**  
 After editing `.py` files in `scripts/`, push those changes back to the registry:

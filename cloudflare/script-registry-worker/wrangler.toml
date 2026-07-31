@@ -9,7 +9,13 @@ binding = "SCRIPTS"
 id = "0836c3ab1d4e4d6d8fffbbb6219aca4e"
 preview_id = "12975d69de3f42248c516a4c4cef5bd5"
 
+[vars]
+# Repo that receives the repository_dispatch "registry-updated" event when a
+# script is created/edited/deleted, so the sync workflow runs immediately.
+# Also requires the GITHUB_DISPATCH_TOKEN secret (see README); without the
+# secret the notification is silently skipped and the daily cron still syncs.
+GITHUB_REPO = "Architeuthis-Flux/JumperIDE"
+
 # Optional: lightweight rate limit (requests per minute per IP)
 # Not enforced if unset
-# [vars]
 # RATE_LIMIT_PER_MIN = "30"

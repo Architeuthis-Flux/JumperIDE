@@ -45,7 +45,7 @@ if __name__ == "__main__":
 `);
 
     // ----------------------------------------------------------------------
-    await loadVFS(vm, 'https://viper-ide.org/assets/vm_vfs.tar.gz')
+    await loadVFS(vm, new URL('vm_vfs.tar.gz', document.baseURI).href)
 
 }
 
@@ -71,8 +71,9 @@ export class MicroPythonWASM extends Transport {
             }
         }
 
+        // Self-hosted: must match the micropython.mjs glue (see rollup.config.mjs)
         this.mp = await loadMicroPython({
-            url: 'https://viper-ide.org/assets/micropython.wasm',
+            url: new URL('micropython.wasm', document.baseURI).href,
             stdout: (data) => {
                 writer.write(data)
             },

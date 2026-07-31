@@ -58,11 +58,27 @@ fs.copyFileSync('node_modules/@astral-sh/ruff-wasm-web/ruff_wasm_bg.wasm', 'buil
 // @pybricks/mpy-cross-v6 JS glue. The viper-ide.org copy drifted on
 // 2026-07-31 and broke WebAssembly.instantiate (Import #0 "env" mismatch).
 fs.copyFileSync('node_modules/@pybricks/mpy-cross-v6/build/mpy-cross-v6.wasm', 'build/mpy-cross-v6.wasm')
+// MicroPython VM (emulator + tools VM): glue and wasm are a matched pair from
+// the same npm package. viper-ide.org deleted its hosted micropython.mjs on
+// 2026-07-31 (they inline it into their bundle now), so remote loading is dead.
+fs.copyFileSync('node_modules/@micropython/micropython-webassembly-pyscript/micropython.mjs', 'build/micropython.mjs')
+fs.copyFileSync('node_modules/@micropython/micropython-webassembly-pyscript/micropython.wasm', 'build/micropython.wasm')
+// VFS images for the MicroPython VM, vendored (snapshot of upstream's built
+// tarballs; contents are pure Python + mpy v6 bytecode, compatible with the
+// pinned VM above). Upstream builds these from src/tools_vfs & src/vm_vfs in
+// vshymanskyy/ViperIDE if they ever need regenerating.
+fs.copyFileSync('vendor/tools_vfs.tar.gz', 'build/tools_vfs.tar.gz')
+fs.copyFileSync('vendor/vm_vfs.tar.gz', 'build/vm_vfs.tar.gz')
 if (fs.existsSync('assets')) {
   copyDirSync('assets', 'build/assets')
 }
 if (fs.existsSync('src/manifest.json')) {
-  fs.copyFileSync('src/manifest.json', 'build/manifest.json')
+  // Inject the app version so the in-app update check (app.js) can compare the
+  // running build against the deployed one. It used to poll viper-ide.org's
+  // manifest, which nagged about *upstream* releases this fork can't use.
+  const manifest = JSON.parse(fs.readFileSync('src/manifest.json', 'utf8'))
+  manifest.version = pkg.version
+  fs.writeFileSync('build/manifest.json', JSON.stringify(manifest))
 }
 
 // ── Stage Replay Badge local dev firmware (optional) ─────────────────────────
