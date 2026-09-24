@@ -106,6 +106,9 @@
                     <div><a href="#" onclick="app.openImage2OledInEditor();return false;" title="Open the image2cpp-style converter — paste/drop an image, tweak threshold/dither, and export as an OLED bitmap">🖼 Image to OLED (image2cpp-style)</a></div>
                     <div><a href="#" onclick="app.importPngToOledBitmap();return false;" id="import-png-oled" title="Pick a PNG and convert it to a 128×32 OLED bitmap in one step">📷 Import PNG → OLED bitmap (128×32)</a></div>
 
+                    <div class="title-lines" id="menu-tools-schematic">schematic</div>
+                    <div><a href="#" onclick="app.openSchematicExportInEditor();return false;" id="schematic-export" title="Capture the netlist off the Jumperless, fill in the parts it can't see, and export a KiCad schematic or a CircuitJS simulation">📐 Netlist → schematic (KiCad / CircuitJS)</a></div>
+
                     <div class="title-lines" id="menu-tools-python">Python</div>
                     <div><a href="#" onclick="app.pyPrettify()" id="py-prettify" title="Auto-format the current Python file using a built-in formatter">🎀 Prettify current file</a></div>
                     <div><a href="#" onclick="app.pyMinify()" id="py-minify" title="Strip comments and whitespace to make the current Python file smaller (useful before deploying to a memory-constrained board)">🤏 Minify current file</a></div>
@@ -182,14 +185,23 @@
                     <div class="title-lines" id="menu-line-docs">docs</div>
                     <div id="custom-doc-sites-container"></div>
                     <button type="button" id="custom-doc-add" title="Add another documentation site URL to the API Reference picker">Add doc site</button>
-                    <div class="title-lines" id="menu-line-firmware-jumperless">jumperless firmware</div>
-                    <div class="space-between" title="GitHub releases page for the Jumperless firmware. JumperIDE checks the latest release tag here and offers to flash firmware.uf2.">
+                    <div class="title-lines" id="menu-line-firmware-jumperless">jumperless v5 firmware</div>
+                    <div class="space-between" title="GitHub releases page for the Jumperless V5 firmware. JumperIDE checks the latest release tag here and offers to flash firmware.uf2.">
                         <label for="jumperless-firmware-url">Releases URL:</label>
                         <input type="url" id="jumperless-firmware-url" placeholder="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" value="https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest" style="flex:1; min-width:0;"/>
                     </div>
                     <div class="firmware-update-actions">
-                        <button type="button" class="firmware-update-btn jumperless" title="Re-poll the Jumperless release feed and toast the latest version" onclick="app.checkFirmwareForKind('jumperless')">Check for updates</button>
-                        <button type="button" class="firmware-update-btn jumperless" title="Open the Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless')">Flash Jumperless…</button>
+                        <button type="button" class="firmware-update-btn jumperless" title="Re-poll the Jumperless V5 release feed and toast the latest version" onclick="app.checkFirmwareForKind('jumperless', 'v5')">Check for updates</button>
+                        <button type="button" class="firmware-update-btn jumperless" title="Open the Jumperless V5 firmware flasher" onclick="app.forceFirmwareUpdate('jumperless', 'v5')">Flash Jumperless V5…</button>
+                    </div>
+                    <div class="title-lines" id="menu-line-firmware-jumperless-og">jumperless og firmware</div>
+                    <div class="space-between" title="GitHub releases page for the OG (RP2040) Jumperless running JumperlOS. The release must carry a firmware_og_backport.1.x.y.z.uf2 asset; its version comes from that file name.">
+                        <label for="jumperless-og-firmware-url">Releases URL:</label>
+                        <input type="url" id="jumperless-og-firmware-url" placeholder="https://github.com/Architeuthis-Flux/JumperlOS/releases/latest" value="https://github.com/Architeuthis-Flux/JumperlOS/releases/latest" style="flex:1; min-width:0;"/>
+                    </div>
+                    <div class="firmware-update-actions">
+                        <button type="button" class="firmware-update-btn jumperless" title="Re-poll the OG Jumperless release feed and toast the latest version" onclick="app.checkFirmwareForKind('jumperless', 'og')">Check for updates</button>
+                        <button type="button" class="firmware-update-btn jumperless" title="Open the OG Jumperless firmware flasher" onclick="app.forceFirmwareUpdate('jumperless', 'og')">Flash Jumperless OG…</button>
                     </div>
 
                     <div class="title-lines" id="menu-line-firmware-badge">replay badge firmware</div>

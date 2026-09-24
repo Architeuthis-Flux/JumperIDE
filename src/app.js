@@ -37,6 +37,7 @@ import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROP
 import { getBadgeAnchor } from './apiRefBadge.js'
 import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
 import { flashReplayBadge, rebootJumperlessToBootsel, readFirmwareSource, flashJumperlessViaPicoboot } from './firmware_flash.js'
+import { compareVersions, jumperlessBoard, pickJumperlessAsset } from './firmware_feed.mjs'
 import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
@@ -339,6 +340,11 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
                 } catch (err) {
                     console.warn('Could not read device firmware version', err)
                     devInfo.firmware_version = null
+                }
+                // 'og' or 'v5'. Needs the version: OG builds from before the
+                // banner fix still announce themselves as a V5.
+                if (detectDeviceKind(devInfo) === 'jumperless') {
+                    devInfo.board = jumperlessBoard(devInfo.machine, devInfo.firmware_version)
                 }
 
                 if        (fs_tree.filter(x => x.path === '/main.py').length) {
@@ -3194,6 +3200,8 @@ export function updateApp() {
  */
 
 const JUMPERLESS_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest'
+// The OG (RP2040) image rides on the JumperlOS release as firmware_og_backport.<1.x.y.z>.uf2.
+const JUMPERLESS_OG_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlOS/releases/latest'
 const REPLAY_BADGE_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases'
 // Last-resort fallback for when the badge release feed can't be reached. The
 // real source of truth is the GitHub `releases/latest` API; this only kicks
@@ -3218,8 +3226,15 @@ function githubReleasesPageToApi(pageUrl) {
     } catch (_) { return null }
 }
 
-function getJumperlessReleasesPage() {
+function getJumperlessReleasesPage(board = 'v5') {
+    if (board === 'og') {
+        return (getSetting('jumperless-og-firmware-url') || '').trim() || JUMPERLESS_OG_DEFAULT_RELEASES_PAGE
+    }
     return (getSetting('jumperless-firmware-url') || '').trim() || JUMPERLESS_DEFAULT_RELEASES_PAGE
+}
+/** Label for the banner, modal and toasts. */
+function jumperlessLabel(board) {
+    return board === 'og' ? 'Jumperless OG' : 'Jumperless'
 }
 function getReplayBadgeReleasesPage() {
     return (getSetting('replay-badge-firmware-url') || '').trim() || REPLAY_BADGE_DEFAULT_RELEASES_PAGE
@@ -3381,21 +3396,6 @@ async function _raw_readDeviceFirmwareVersion(raw, devInfo) {
     return null
 }
 
-/** Compare two dotted version strings (e.g. "5.6.6.2"). */
-function compareVersions(a, b) {
-    if (!a || !b) return 0
-    const pa = String(a).split(/[.-]/).map(s => parseInt(s, 10) || 0)
-    const pb = String(b).split(/[.-]/).map(s => parseInt(s, 10) || 0)
-    const len = Math.max(pa.length, pb.length)
-    for (let i = 0; i < len; i++) {
-        const x = pa[i] || 0
-        const y = pb[i] || 0
-        if (x < y) return -1
-        if (x > y) return 1
-    }
-    return 0
-}
-
 function normalizeTag(tag) {
     if (!tag) return null
     return String(tag).trim().replace(/^v/i, '')
@@ -3417,8 +3417,20 @@ async function fetchLatestGithubReleaseFromPage(pageUrl, defaultPage) {
     }
 }
 
-async function fetchLatestJumperlessRelease() {
-    return await fetchLatestGithubReleaseFromPage(getJumperlessReleasesPage(), JUMPERLESS_DEFAULT_RELEASES_PAGE)
+async function fetchLatestJumperlessRelease(board = 'v5') {
+    const fallback = board === 'og' ? JUMPERLESS_OG_DEFAULT_RELEASES_PAGE : JUMPERLESS_DEFAULT_RELEASES_PAGE
+    const latest = await fetchLatestGithubReleaseFromPage(getJumperlessReleasesPage(board), fallback)
+    if (!latest || board !== 'og') return latest
+    // The OG image is its own asset on a V5-numbered release, so its version
+    // comes from the file name. No asset means nothing to offer: that
+    // release's firmware.uf2 is the V5 image (or, on the public Jumperless
+    // repo, the original 1.3.x firmware), never something to put on an OG.
+    const asset = pickJumperlessAsset('og', latest.assets)
+    if (!asset) {
+        console.warn(`[firmware] no firmware_og_backport.*.uf2 asset on ${latest.releaseUrl}`)
+        return null
+    }
+    return { ...latest, version: asset.version }
 }
 
 async function fetchLatestReplayBadgeRelease() {
@@ -3446,8 +3458,8 @@ async function checkFirmwareUpdate(info) {
     let label = ''
     try {
         if (kind === 'jumperless') {
-            label = 'Jumperless'
-            latest = await fetchLatestJumperlessRelease()
+            label = jumperlessLabel(info.board)
+            latest = await fetchLatestJumperlessRelease(info.board)
         } else if (kind === 'replay-badge') {
             label = 'Replay Badge'
             latest = await fetchLatestReplayBadgeRelease()
@@ -3475,6 +3487,7 @@ async function checkFirmwareUpdate(info) {
 
     pendingFirmwareUpdate = {
         kind,
+        board: info.board || null,
         label,
         currentVersion: current,
         latestVersion: latest.version,
@@ -3550,13 +3563,14 @@ export function startFirmwareUpdate() {
 function offerRecoveryFlashIfBricked(connectionType) {
     // USB only — flashing over WebSocket / BLE doesn't make sense.
     if (connectionType !== 'usb') return
-    // Default to badge since that's the only path we can flash entirely
-    // in-browser; the user can switch in the modal if they actually have a
-    // Jumperless connected.
+    // Nothing answered, so nothing said which board this is: one button per
+    // flashable device. The PICOBOOT flasher refuses a wrong-chip image, so a
+    // wrong guess costs a click, not a board.
     const html = `Device opened the serial port but didn't respond to the REPL probe. ` +
         `It might be running a hung script or have bad firmware.<br><br>` +
         `<button class="fw-toast-yes" style="margin-right:8px;">Flash Replay Badge</button>` +
-        `<button class="fw-toast-jl">Flash Jumperless</button>`
+        `<button class="fw-toast-jl" style="margin-right:8px;">Flash Jumperless V5</button>` +
+        `<button class="fw-toast-jl-og">Flash Jumperless OG</button>`
     const $toast = toastr.warning(html, 'Device not responding', {
         timeOut: 0,
         extendedTimeOut: 0,
@@ -3573,7 +3587,12 @@ function offerRecoveryFlashIfBricked(connectionType) {
         $toast.find('.fw-toast-jl').on('click', (e) => {
             e.stopPropagation()
             toastr.clear($toast)
-            forceFirmwareUpdate('jumperless')
+            forceFirmwareUpdate('jumperless', 'v5')
+        })
+        $toast.find('.fw-toast-jl-og').on('click', (e) => {
+            e.stopPropagation()
+            toastr.clear($toast)
+            forceFirmwareUpdate('jumperless', 'og')
         })
     }
 }
@@ -3598,12 +3617,12 @@ export async function refreshFirmwareCheck() {
  * latest version. If a device of the matching kind is connected, also
  * compares against installed and may re-show the banner.
  */
-export async function checkFirmwareForKind(kind) {
-    const label = kind === 'jumperless' ? 'Jumperless' : 'Replay Badge'
+export async function checkFirmwareForKind(kind, board = 'v5') {
+    const label = kind === 'jumperless' ? jumperlessLabel(board) : 'Replay Badge'
     let latest
     try {
         latest = kind === 'jumperless'
-            ? await fetchLatestJumperlessRelease()
+            ? await fetchLatestJumperlessRelease(board)
             : await fetchLatestReplayBadgeRelease()
     } catch (err) {
         toastr.error(`Couldn't reach the ${label} release feed: ${err.message || err}`)
@@ -3616,7 +3635,8 @@ export async function checkFirmwareForKind(kind) {
 
     // If a matching device is connected, run the full check so the banner
     // and modal cache stay in sync.
-    if (devInfo && detectDeviceKind(devInfo) === kind) {
+    const boardMatches = kind !== 'jumperless' || (devInfo && (devInfo.board || 'v5') === board)
+    if (devInfo && detectDeviceKind(devInfo) === kind && boardMatches) {
         try { localStorage.removeItem(FIRMWARE_BANNER_DISMISS_KEY) } catch (_) {}
         pendingFirmwareUpdate = null
         hideFirmwareUpdateBanner()
@@ -3648,26 +3668,31 @@ export async function checkFirmwareForKind(kind) {
  * infer from the currently connected device (or default to the badge, since
  * that's the only one we can flash entirely in-browser).
  */
-export async function forceFirmwareUpdate(kind = null) {
+export async function forceFirmwareUpdate(kind = null, board = null) {
     let resolved = kind
     if (!resolved) {
         resolved = devInfo ? detectDeviceKind(devInfo) : 'replay-badge'
         if (resolved === 'unknown') resolved = 'replay-badge'
     }
+    // Jumperless only: which image. The caller's choice, else the connected
+    // board, else the V5.
+    const resolvedBoard = resolved === 'jumperless' ? (board || (devInfo && devInfo.board) || 'v5') : null
 
     // If we already have pending update info for this kind, reuse it so all
     // the URL/asset metadata is preserved.
-    if (pendingFirmwareUpdate && pendingFirmwareUpdate.kind === resolved) {
+    if (pendingFirmwareUpdate && pendingFirmwareUpdate.kind === resolved &&
+        (pendingFirmwareUpdate.board || null) === resolvedBoard) {
         openFirmwareUpdateModal({ ...pendingFirmwareUpdate, forced: true })
         return
     }
 
     // Otherwise build a minimal update object. We try to fetch latest release
     // info best-effort but don't block on it.
-    const label = resolved === 'jumperless' ? 'Jumperless' : 'Replay Badge'
-    const releaseUrl = resolved === 'jumperless' ? getJumperlessReleasesPage() : getReplayBadgeReleasesPage()
+    const label = resolved === 'jumperless' ? jumperlessLabel(resolvedBoard) : 'Replay Badge'
+    const releaseUrl = resolved === 'jumperless' ? getJumperlessReleasesPage(resolvedBoard) : getReplayBadgeReleasesPage()
     const update = {
         kind: resolved,
+        board: resolvedBoard,
         label,
         currentVersion: (devInfo && devInfo.firmware_version) || null,
         latestVersion: null,
@@ -3680,7 +3705,7 @@ export async function forceFirmwareUpdate(kind = null) {
     // Fire and forget — refine the modal once we have release data.
     try {
         const latest = resolved === 'jumperless'
-            ? await fetchLatestJumperlessRelease()
+            ? await fetchLatestJumperlessRelease(resolvedBoard)
             : await fetchLatestReplayBadgeRelease()
         if (!latest) return
         const refined = {
@@ -3876,16 +3901,25 @@ function openFirmwareUpdateModal(update) {
     modal.classList.remove('hidden')
 }
 
-/* ── Jumperless (RP2350B) — UF2 drop ──────────────────────────────────── */
+/* ── Jumperless (V5: RP2350B, OG: RP2040) — UF2 drop ──────────────────── */
 
 function renderJumperlessModal(update, instructions, actions) {
+    const og = update.board === 'og'
+    // What the user sees: the BOOTSEL drive and the WebUSB picker entry.
+    const driveName = og ? 'RPI-RP2' : 'RP2350'
+    const bootName = og ? 'RP2 Boot' : 'RP2350 Boot'
     // Prefer the asset URL straight from the GitHub API response if present,
-    // otherwise derive it from the release page URL or fall back to the canonical
-    // JumperlessV5 download path so a customised settings URL still works.
+    // otherwise (V5 only) derive it from the release page URL or fall back to
+    // the canonical JumperlessV5 download path so a customised settings URL
+    // still works. The OG image's name carries its version, so without the
+    // release's asset list there is nothing to derive.
     let uf2Url = null
-    const uf2Asset = (update.assets || []).find(a => /\.uf2$/i.test(a.name))
-    if (uf2Asset && uf2Asset.browser_download_url) {
-        uf2Url = uf2Asset.browser_download_url
+    const uf2Asset = pickJumperlessAsset(og ? 'og' : 'v5', update.assets)
+    const uf2Name = uf2Asset ? uf2Asset.name : 'firmware.uf2'
+    if (uf2Asset && uf2Asset.url) {
+        uf2Url = uf2Asset.url
+    } else if (og) {
+        uf2Url = null
     } else if (update.releaseUrl && update.releaseUrl.includes('/tag/')) {
         uf2Url = update.releaseUrl.replace('/tag/', '/download/') + '/firmware.uf2'
     } else if (update.latestVersion) {
@@ -3904,24 +3938,24 @@ function renderJumperlessModal(update, instructions, actions) {
     if (webusbOk && uf2Url) {
         instructions.innerHTML = `
             <p><strong>Flash from browser</strong> does the whole dance in one go: it reboots the
-            Jumperless into its UF2 bootloader, downloads <code>firmware.uf2</code>, and writes it
+            Jumperless into its UF2 bootloader, downloads <code>${uf2Name}</code>, and writes it
             over USB using the same PICOBOOT protocol <code>picotool</code> uses — no file dragging.</p>
-            <p>The first time, a device picker opens — choose <code>RP2350 Boot</code> (it can take a
+            <p>The first time, a device picker opens — choose <code>${bootName}</code> (it can take a
             couple of seconds to appear after the reboot). After that, re-flashes are fully automatic:
             the bootloader is claimed the moment it enumerates and its USB drive is ejected before the
             OS can mount it. If the Jumperless isn't connected to JumperIDE right now, hold its BOOTSEL
             button while plugging in USB first.</p>
-            <p>Prefer the manual route? <em>Reboot to bootloader</em>, <em>Download firmware.uf2</em>,
-            and drag the file onto the <code>RP2350</code> drive.</p>
+            <p>Prefer the manual route? <em>Reboot to bootloader</em>, <em>Download ${uf2Name}</em>,
+            and drag the file onto the <code>${driveName}</code> drive.</p>
         `
     } else {
         instructions.innerHTML = `
             <p>The Jumperless flashes by drag-and-drop (in-browser flashing needs WebUSB — Chrome, Edge, or Opera).
             We'll do the rest of the dance for you:</p>
             <ol>
-                <li>Click <strong>Reboot to bootloader</strong>. Your Jumperless will disconnect and reappear as a USB drive named <code>RP2350</code> (or <code>RPI-RP2</code>).</li>
-                <li>Click <strong>Download firmware.uf2</strong>.</li>
-                <li>Drag the downloaded <code>firmware.uf2</code> onto that drive. The board will flash and reboot automatically.</li>
+                <li>Click <strong>Reboot to bootloader</strong>. Your Jumperless will disconnect and reappear as a USB drive named <code>${driveName}</code>.</li>
+                <li>Click <strong>Download ${uf2Name}</strong>.</li>
+                <li>Drag the downloaded <code>${uf2Name}</code> onto that drive. The board will flash and reboot automatically.</li>
                 <li>Reconnect via the USB button when it's back.</li>
             </ol>
         `
@@ -3936,7 +3970,7 @@ function renderJumperlessModal(update, instructions, actions) {
         btnWebFlash.onclick = async () => {
             btnWebFlash.disabled = true
             try {
-                await webFlashJumperless(uf2Url)
+                await webFlashJumperless(uf2Url, bootName)
             } catch (err) {
                 fwLog('ERROR: ' + (err.message || err))
             } finally {
@@ -3953,7 +3987,7 @@ function renderJumperlessModal(update, instructions, actions) {
         btnReboot.disabled = true
         try {
             await rebootJumperlessIntoBootsel()
-            fwLog('Look for an RP2350 / RPI-RP2 drive on your computer, then drop firmware.uf2 onto it.')
+            fwLog(`Look for a ${driveName} drive on your computer, then drop ${uf2Name} onto it.`)
         } catch (err) {
             fwLog('Could not reboot: ' + (err.message || err))
             btnReboot.disabled = false
@@ -3965,7 +3999,7 @@ function renderJumperlessModal(update, instructions, actions) {
     btnDownload.href = uf2Url || update.releaseUrl
     btnDownload.target = '_blank'
     btnDownload.rel = 'noopener'
-    btnDownload.textContent = uf2Url ? 'Download firmware.uf2' : 'Open release page'
+    btnDownload.textContent = uf2Url ? `Download ${uf2Name}` : 'Open release page'
 
     const btnRelease = document.createElement('a')
     btnRelease.className = 'fw-btn secondary'
@@ -3998,7 +4032,7 @@ function renderJumperlessModal(update, instructions, actions) {
  */
 let needMainPortForBootsel = false
 
-async function webFlashJumperless(uf2Url) {
+async function webFlashJumperless(uf2Url, bootName = 'RP2350 Boot') {
     const uf2Promise = readFirmwareSource({ url: uf2Url, onLog: (m) => fwLog(m) })
     uf2Promise.catch(() => {})  // surfaced via await below; avoid unhandled rejection if we bail first
 
@@ -4085,7 +4119,7 @@ async function webFlashJumperless(uf2Url) {
     }
 
     if (!usbDevice) {
-        fwLog('Select the "RP2350 Boot" device in the picker (it may take a moment to appear)…')
+        fwLog(`Select the "${bootName}" device in the picker (it may take a moment to appear)…`)
         try {
             usbDevice = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x2e8a }] })
         } catch (err) {

@@ -9,7 +9,7 @@
  *     user (preferred) or pop a port picker so the user can select it after
  *     putting the badge into download mode (hold BOOT, tap RST).
  *
- *   - Jumperless V5 (RP2350B): the chip enumerates as a USB MSC drive when
+ *   - Jumperless V5 (RP2350B) and OG Jumperless (RP2040): the chip enumerates as a USB MSC drive when
  *     in BOOTSEL mode. We can't write to MSC from the browser, but we can
  *     trigger BOOTSEL via the standard "1200-baud touch" reset, then prompt
  *     the user to drop firmware.uf2 onto the resulting RPI-RP2 / RP2350
@@ -18,6 +18,7 @@
  */
 
 import { ESPLoader, Transport } from 'esptool-js'
+import { RP2_UF2_FAMILIES, assertUf2FamiliesMatchChip } from './firmware_feed.mjs'
 
 /**
  * Open the given SerialPort at 1200 baud and immediately close it.
@@ -343,15 +344,6 @@ const UF2_MAGIC_END    = 0x0AB16F30
 const UF2_FLAG_NOT_MAIN_FLASH    = 0x00000001
 const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000
 
-// RP2-family UF2 family IDs (from the microsoft/uf2 registry).
-const RP2_UF2_FAMILIES = new Set([
-    0xe48bff56, // RP2040
-    0xe48bff57, // RP2350 absolute
-    0xe48bff58, // RP2350 data
-    0xe48bff59, // RP2350 ARM-S
-    0xe48bff5a, // RP2350 RISC-V
-    0xe48bff5b, // RP2350 ARM-NS
-])
 
 const FLASH_XIP_BASE = 0x10000000
 const FLASH_XIP_END  = 0x20000000   // generous upper bound for any RP2 XIP window
@@ -660,7 +652,7 @@ export async function flashJumperlessViaPicoboot({ uf2Data, usbDevice = null, on
 
     let device = usbDevice
     if (!device) {
-        log('Select the "RP2350 Boot" USB device…')
+        log('Select the "RP2350 Boot" (V5) or "RP2 Boot" (OG) USB device…')
         try {
             device = await navigator.usb.requestDevice({ filters: [{ vendorId: PICOBOOT_VID }] })
         } catch (err) {
@@ -693,6 +685,10 @@ export async function flashJumperlessViaPicoboot({ uf2Data, usbDevice = null, on
             throw err
         }
         log(`Connected to ${device.productName || 'RP2 bootloader'} via PICOBOOT (${pb.isRp2040 ? 'RP2040' : 'RP2350'}).`)
+        // The families were checked against the RP2 table above; now that the
+        // chip is known, refuse the cross (an OG image on a V5 or the reverse)
+        // before a single sector is erased.
+        assertUf2FamiliesMatchChip(families, pb.isRp2040)
 
         // EXCLUSIVE_AND_EJECT: marks the BOOTSEL drive's media as not present,
         // which unmounts it from Finder/Explorer for the duration of the

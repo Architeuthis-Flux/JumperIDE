@@ -6,6 +6,7 @@
   "scripts": {
     "build": "rollup --config",
     "start": "rollup --config --configDebug --watch",
+    "test": "node --test test/",
     "check:api-ref": "node scripts/check-api-ref-data.js",
     "deploy": "npm run build && wrangler deploy",
     "preview": "npm run build && wrangler dev"
