@@ -51,6 +51,10 @@ fs.copyFileSync('src/image2oled.css',  'build/image2oled.css')
 fs.copyFileSync('src/oled_images_browse.html', 'build/oled_images_browse.html')
 fs.copyFileSync('src/oled_images_browse.js',   'build/oled_images_browse.js')
 fs.copyFileSync('src/app_common.css',  'build/app_common.css')
+// KiCanvas powers the schematic preview in the Schematic Export panel. It is not on
+// npm and is deliberately kept out of the rollup graph: onwarn() below throws on any
+// warning, and a 477 KB third-party bundle is a reliable way to produce one.
+fs.copyFileSync('vendor/kicanvas/kicanvas.js', 'build/kicanvas.js')
 // Self-host the Ruff linter WASM: it must be version-locked to the bundled
 // @astral-sh/ruff-wasm-web glue (the copy hosted on viper-ide.org drifts).
 fs.copyFileSync('node_modules/@astral-sh/ruff-wasm-web/ruff_wasm_bg.wasm', 'build/ruff_wasm_bg.wasm')

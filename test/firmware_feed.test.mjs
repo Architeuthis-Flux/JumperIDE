@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-    compareVersions, jumperlessBoard, pickJumperlessAsset,
+    compareVersions, jumperlessBoard, pickJumperlessAsset, isOriginalOgUsb,
     assertUf2FamiliesMatchChip, RP2040_UF2_FAMILY,
 } from '../src/firmware_feed.mjs'
 
@@ -37,6 +37,14 @@ test('board: the new OG banner names itself', () => {
 test('board: OG builds shipped before the banner fix claim to be a V5, so the version major decides', () => {
     assert.equal(jumperlessBoard('jumperless-v5 with rp2350b', '1.7.11.3'), 'og')
     assert.equal(jumperlessBoard('jumperless-v5 with rp2350b', '5.7.11.3'), 'v5')
+})
+
+test('usb: the original OG firmware is ACAB:1312 (as transports.js hex strings or numbers); JumperlOS is not', () => {
+    assert.equal(isOriginalOgUsb('acab', '1312'), true)
+    assert.equal(isOriginalOgUsb('ACAB', '1312'), true)
+    assert.equal(isOriginalOgUsb(0xacab, 0x1312), true)
+    assert.equal(isOriginalOgUsb('1d50', 'acab'), false)
+    assert.equal(isOriginalOgUsb(undefined, undefined), false)
 })
 
 test('board: no version and a V5 banner is a V5; nothing at all is a V5', () => {

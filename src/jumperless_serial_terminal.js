@@ -10,6 +10,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { QID, QS } from './utils.js'
 import { getTerminalOptions } from './terminal_utils.js'
+import { openPortPatiently } from './transports.js'
+import { getSetting } from './settings.js'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -126,8 +128,9 @@ export async function disconnect(clearScreen = false) {
 /**
  * Connect to a specific SerialPort object.
  * @param {SerialPort} port
+ * @param {number} waitMs how long to wait for another program to release the port
  */
-async function connectToPort(port) {
+async function connectToPort(port, waitMs = 4000) {
     if (connected) await disconnect(false)
 
     if (!port) {
@@ -144,14 +147,15 @@ async function connectToPort(port) {
     } catch (_) {}
 
     try {
-        await port.open({ baudRate: DEFAULT_BAUD })
+        await openPortPatiently(port, { baudRate: DEFAULT_BAUD }, waitMs,
+            () => updateStatusUI(false, 'Port in use by another program - waiting for it...'))
     } catch (err) {
         console.error('[SerialTerm] port.open failed', err)
         updateStatusUI(false, err.name === 'InvalidStateError'
             ? 'Port already open elsewhere. Disconnect there first.'
             : `Open failed: ${err.message}`)
         if (btn) btn.disabled = false
-        return
+        return false
     }
 
     activePort = port
@@ -165,7 +169,7 @@ async function connectToPort(port) {
     // Send init string for Jumperless
     writer.write(new TextEncoder().encode(CONNECT_INIT_STRING)).catch(() => {})
 
-    port.addEventListener('disconnect', () => disconnect(false))
+    port.addEventListener('disconnect', () => disconnect(false), { once: true })
 
     // Read loop: serial → xterm
     ;(async () => {
@@ -197,7 +201,40 @@ async function connectToPort(port) {
     }
     updateStatusUI(true, label)
     if (btn) btn.disabled = false
+    return true
 }
+
+// ─── Share the port while nobody is looking ───────────────────────────────────
+// A page can't be asked for its port the way the desktop app can (no file, no
+// signal reaches a browser tab), so the one cue we have is visibility: while
+// this tab is hidden nobody is reading the terminal anyway. Opt-in via the
+// "Share serial terminal port when hidden" setting; we let go 1.5 s after the
+// tab hides and take the same port back when it is visible again.
+
+let parkedPort = null
+let hideTimer = null
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        if (!connected || hideTimer || !getSetting('serial-term-share-port')) return
+        hideTimer = setTimeout(async () => {
+            hideTimer = null
+            if (!connected || document.visibilityState !== 'hidden') return
+            parkedPort = activePort
+            await disconnect(false)
+            updateStatusUI(false, 'Port released while this tab is hidden')
+            if (term) term.write('\r\n\x1b[33m*** Port released while tab hidden; reconnecting when visible ***\x1b[0m\r\n')
+        }, 1500)
+        return
+    }
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null }
+    if (parkedPort && !connected) {
+        const p = parkedPort
+        parkedPort = null
+        // Still busy after 10 s: keep it parked so the next show/hide cycle retries.
+        connectToPort(p, 10000).then(ok => { if (!ok && !connected && !parkedPort) parkedPort = p })
+    }
+})
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 

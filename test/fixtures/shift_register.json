@@ -1,0 +1,16 @@
+{
+  "_comment": "Captured-shape fixture: 74HC595 (DIP-16) in rows 10-17/40-47 driving one LED through a resistor. Row 5 is deliberately absent from every net -- it is the junction between R1 and D1, which the crossbar never touches and so never reports.",
+  "power": { "top_rail": 3.3, "bottom_rail": 5.0, "dac0": 0.0, "dac1": 0.0 },
+  "nets": [
+    { "index": 1, "name": "GND",      "nodes": ["GND", "17", "43", "9"],  "special": "none" },
+    { "index": 2, "name": "Top Rail", "nodes": ["TOP_R", "40", "46"],     "special": "RAIL", "voltage": 3.3 },
+    { "index": 3, "name": "Net 3",    "nodes": ["D11", "45"],             "special": "none" },
+    { "index": 4, "name": "Net 4",    "nodes": ["D12", "44"],             "special": "none" },
+    { "index": 5, "name": "Net 5",    "nodes": ["D13", "42"],             "special": "none" },
+    { "index": 6, "name": "Net 6",    "nodes": ["10", "1"],               "special": "none" }
+  ],
+  "gpio": [
+    { "pin": 1, "net": null, "function": "SIO", "direction": "INPUT", "pull": "none", "reading": "float", "floating_read": 0 }
+  ],
+  "overlays": []
+}

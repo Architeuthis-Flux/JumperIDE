@@ -6,6 +6,7 @@
  * This includes no assurances about being fit for any specific purpose.
  */
 
+import toastr from 'toastr'
 import { sleep, Mutex, report } from './utils.js'
 
 export class Transport {
@@ -170,6 +171,36 @@ export class Transport {
  * USB / Serial
  */
 
+/**
+ * port.open() that waits for another program to let go of the port.
+ *
+ * The OS hands a serial port to one process; Chrome reports someone else's
+ * hold as a NetworkError "Failed to open serial port." Short-lived holders
+ * (a script talking to the REPL, the Jumperless app mid-reconnect, a flasher)
+ * are gone within a couple of seconds, so keep trying until `waitMs` is up
+ * and only then fail - with a message that says what actually happened.
+ */
+export async function openPortPatiently(port, options, waitMs = 4000, onWaiting = null) {
+    const deadline = Date.now() + waitMs
+    for (let waited = false; ; waited = true) {
+        try {
+            await port.open(options)
+            return
+        } catch (err) {
+            if (err.name !== 'NetworkError') throw err
+            if (Date.now() >= deadline) {
+                // DOMException.message is read-only, so wrap it.
+                const busy = new Error('Serial port is in use by another program (Jumperless app, another terminal or tab, a script). '
+                                     + 'Close it there or wait for it to finish, then connect again.', { cause: err })
+                busy.name = 'NetworkError'
+                throw busy
+            }
+            if (!waited && onWaiting) onWaiting()
+            await sleep(250)
+        }
+    }
+}
+
 export class WebSerial extends Transport {
     constructor(serial=null) {
         super()
@@ -204,7 +235,8 @@ export class WebSerial extends Transport {
     }
 
     async connect() {
-        await this.port.open({ baudRate: 115200 })
+        await openPortPatiently(this.port, { baudRate: 115200 }, 4000,
+            () => toastr.info('Port is in use by another program - waiting for it to be released...'))
 
         const decoderStream = new TextDecoderStream()
         this.readableStreamClosed = this.port.readable.pipeTo(decoderStream.writable)

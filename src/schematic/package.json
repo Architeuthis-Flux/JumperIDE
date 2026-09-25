@@ -1,0 +1,4 @@
+{
+  "_comment": "Scopes \"type\": \"module\" to this directory so `node --test test/` can import these modules directly. The marker cannot live at src/ or repo root: scripts/generate-api-ref-data.js require()s src/api_ref_help_overrides.js as CommonJS, and would silently stop applying the overrides. Rollup resolves everything here by relative path and is unaffected.",
+  "type": "module"
+}

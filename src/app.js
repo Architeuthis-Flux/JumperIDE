@@ -11,6 +11,7 @@ import 'toastr/build/toastr.css'
 import 'github-fork-ribbon-css/gh-fork-ribbon.css'
 import './app_common.css'
 import './app.css'
+import './schematic/panel.css'
 
 import toastr from 'toastr'
 import i18next from 'i18next'
@@ -37,12 +38,15 @@ import { getMicroPythonSymbolEntry, getJumperlessAnchor, JUMPERLESS_FORCE_MICROP
 import { getBadgeAnchor } from './apiRefBadge.js'
 import { createPort1EditorTab, focusPort1Tab, disconnect as disconnectPinnedSerial } from './jumperless_serial_terminal.js'
 import { flashReplayBadge, rebootJumperlessToBootsel, readFirmwareSource, flashJumperlessViaPicoboot } from './firmware_flash.js'
-import { compareVersions, jumperlessBoard, pickJumperlessAsset } from './firmware_feed.mjs'
+import { compareVersions, jumperlessBoard, pickJumperlessAsset, isOriginalOgUsb } from './firmware_feed.mjs'
 import { getTerminalOptions } from './terminal_utils.js'
 
 import { marked } from 'marked'
 import { UAParser } from 'ua-parser-js'
 import { parseOledBin, parseFbFile, oledBinViewer, defaultOledBinBytes, pngToOledBin as _pngToOledBin, detectFrameSequence, binToFb, fbToBin, rotateSsd1306180 } from './oled_bin_viewer.js'
+import { schematicPanel } from './schematic/panel.js'
+import { loadAutosave, flushAutosave } from './schematic/store.js'
+import { GET_STATE_PY, NETLIST_FALLBACK_PY } from './schematic/capture.js'
 import { Transaction } from '@codemirror/state'
 
 import { splitPath, sleep, fetchJSON, postJSON, putJSON, getUserUID, getScreenInfo, IdleMonitor,
@@ -94,6 +98,8 @@ const oledBinViewers = new Map()
 const registryEditForBin = new Map()
 /** When a .py tab was opened from the registry, maps fn -> script id so Edit modal can use editor content. */
 const registryScriptIdForFn = new Map()
+/** @type {Map<string, { getProject: () => object, destroy: () => void }>} */
+const schematicPanels = new Map()
 
 function resetRunButton() {
     if (isInRunMode) {
@@ -385,7 +391,7 @@ export async function connectDevice(type, { existingSerialPort = null, silent = 
                 // Port opened but the REPL never answered — common after a bad
                 // flash, or when an ESP32-S3 boots into a hung user app. Offer
                 // to (re)flash. Only ask once per connect.
-                offerRecoveryFlashIfBricked(type)
+                offerRecoveryFlashIfBricked(type, port && port.info)
             } else {
                 report('Error reading board info', lastErr)
             }
@@ -453,6 +459,37 @@ async function _withRawRetry(errorTitle, fn, { attempts = 2, retryDelay = 250 } 
         }
     }
     throw lastErr
+}
+
+
+/**
+ * Read the live netlist off a connected Jumperless.
+ *
+ * `_execSentinel` rather than plain `exec` is not optional here: the firmware emits
+ * unsolicited status lines on the same stream, and they land in the middle of the
+ * JSON often enough to matter. The sentinel framing slices out exactly our output.
+ *
+ * Both attempts share one raw session. get_state() is tried first because it carries
+ * GPIO and overlay data the piecewise rebuild cannot, but its failure is deterministic
+ * rather than transient, so falling back immediately beats letting _withRawRetry
+ * repeat a call that will fail again identically.
+ */
+async function captureJumperlessState() {
+    if (!port) { throw new Error('Not connected to a Jumperless') }
+    return _withRawRetry('Reading the Jumperless netlist', async (raw) => {
+        try {
+            const out = await raw._execSentinel(GET_STATE_PY, 15000)
+            if (out && out.includes('{')) { return out }
+        } catch (err) {
+            console.warn('jumperless.get_state() failed; rebuilding the netlist per-net:', err.message)
+            toastr.warning('get_state() failed on this board, so the netlist was read net by net. Net names and GPIO details may be missing.')
+        }
+        const out = await raw._execSentinel(NETLIST_FALLBACK_PY, 20000)
+        if (!out || !out.includes('{')) {
+            throw new Error('The board returned no netlist. Is this a Jumperless running JumperlOS?')
+        }
+        return out
+    })
 }
 
 export async function refreshFileTree() {
@@ -676,6 +713,32 @@ export function openImage2OledInEditor() {
     iframe.className = 'i2o-iframe i2o-iframe-editor'
     iframe.title = 'Image to OLED'
     editorElement.appendChild(iframe)
+}
+
+/** Virtual tab name for the Schematic Export panel. */
+export const SCHEMATIC_TAB_FN = 'Schematic Export'
+
+/**
+ * Open the Schematic Export panel: capture the netlist, declare the parts the board
+ * cannot see, and export to KiCad or CircuitJS.
+ *
+ * The panel is handed a capture callback rather than reaching for the port itself --
+ * `port` is module-private here, and keeping the transport on this side means the
+ * panel stays driveable from a pasted fixture with no hardware attached.
+ */
+export function openSchematicExportInEditor() {
+    if (displayOpenFile(SCHEMATIC_TAB_FN)) {
+        return
+    }
+    const editorElement = createTab(SCHEMATIC_TAB_FN)
+    editorElement.innerHTML = ''
+    const panel = schematicPanel(editorElement, {
+        tabName: SCHEMATIC_TAB_FN,
+        onCapture: captureJumperlessState,
+        onNotify: (msg, kind) => (kind === 'error' ? toastr.error(msg) : toastr.info(msg)),
+        initialProject: loadAutosave(),
+    })
+    schematicPanels.set(SCHEMATIC_TAB_FN, panel)
 }
 
 /** Open the Browse OLED Images registry page in the center editor as a tab. */
@@ -1111,7 +1174,8 @@ async function _loadContent(fn, content, editorElement) {
 }
 
 export async function saveCurrentFile() {
-    if (editorFn === IMAGE2OLED_TAB_FN || editorFn === BROWSE_OLED_IMAGES_TAB_FN) return
+    // Virtual tabs have no file behind them; Ctrl+S must not try to write one to the device.
+    if (editorFn === IMAGE2OLED_TAB_FN || editorFn === BROWSE_OLED_IMAGES_TAB_FN || editorFn === SCHEMATIC_TAB_FN) return
     if (!port) return;
 
     if (!editor && oledBinViewers.has(editorFn)) {
@@ -3054,6 +3118,13 @@ Connect your Jumperless board and start coding!
             registryEditForBin.delete(event.detail.fn)
             registryScriptIdForFn.delete(event.detail.fn)
         }
+        const schematic = schematicPanels.get(event.detail.fn)
+        if (schematic) {
+            // destroy() flushes the pending autosave and releases the preview's
+            // WebGL context, which browsers are stingy with.
+            schematic.destroy()
+            schematicPanels.delete(event.detail.fn)
+        }
         const fileElement = QS(`#menu-file-tree [data-fn="${event.detail.fn}"]`)
         if (fileElement) {
             fileElement.classList.remove("open")
@@ -3199,9 +3270,13 @@ export function updateApp() {
  * esptool-style serial flashing for the ESP32) and is wired up later.
  */
 
-const JUMPERLESS_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest'
-// The OG (RP2040) image rides on the JumperlOS release as firmware_og_backport.<1.x.y.z>.uf2.
-const JUMPERLESS_OG_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlOS/releases/latest'
+// One JumperlOS release carries both images: firmware.uf2 for the V5 and
+// firmware_og_backport.<1.x.y.z>.uf2 for the OG (RP2040).
+const JUMPERLESS_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlOS/releases/latest'
+const JUMPERLESS_OG_DEFAULT_RELEASES_PAGE = JUMPERLESS_DEFAULT_RELEASES_PAGE
+// The settings form persists its inputs' default values, so users who never
+// touched the field carry the old JumperlessV5 default around. Treat it as unset.
+const JUMPERLESS_LEGACY_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/JumperlessV5/releases/latest'
 const REPLAY_BADGE_DEFAULT_RELEASES_PAGE = 'https://github.com/Architeuthis-Flux/Temporal-Replay-26-Badge/releases'
 // Last-resort fallback for when the badge release feed can't be reached. The
 // real source of truth is the GitHub `releases/latest` API; this only kicks
@@ -3230,7 +3305,8 @@ function getJumperlessReleasesPage(board = 'v5') {
     if (board === 'og') {
         return (getSetting('jumperless-og-firmware-url') || '').trim() || JUMPERLESS_OG_DEFAULT_RELEASES_PAGE
     }
-    return (getSetting('jumperless-firmware-url') || '').trim() || JUMPERLESS_DEFAULT_RELEASES_PAGE
+    const url = (getSetting('jumperless-firmware-url') || '').trim()
+    return (!url || url === JUMPERLESS_LEGACY_RELEASES_PAGE) ? JUMPERLESS_DEFAULT_RELEASES_PAGE : url
 }
 /** Label for the banner, modal and toasts. */
 function jumperlessLabel(board) {
@@ -3560,9 +3636,28 @@ export function startFirmwareUpdate() {
  * symptom — bad flash, hung user app, or a board that just rebooted into a
  * crash loop. Pop a non-blocking toast offering to re-flash.
  */
-function offerRecoveryFlashIfBricked(connectionType) {
+function offerRecoveryFlashIfBricked(connectionType, usbInfo = null) {
     // USB only — flashing over WebSocket / BLE doesn't make sense.
     if (connectionType !== 'usb') return
+    // An OG on the original firmware isn't bricked, it just has no MicroPython.
+    // Its USB identity says so; offer the one image it can take.
+    if (usbInfo && isOriginalOgUsb(usbInfo.vid, usbInfo.pid)) {
+        const html = `This is an OG Jumperless running the original firmware, which has no MicroPython ` +
+            `for JumperIDE to talk to. Flashing JumperlOS (the OG backport) fixes that; the Jumperless ` +
+            `desktop app can put the original firmware back later.<br><br>` +
+            `<button class="fw-toast-jl-og">Flash JumperlOS onto this OG</button>`
+        const $toast = toastr.info(html, 'OG Jumperless on original firmware', {
+            timeOut: 0, extendedTimeOut: 0, closeButton: true, tapToDismiss: false, escapeHtml: false,
+        })
+        if ($toast && $toast.length) {
+            $toast.find('.fw-toast-jl-og').on('click', (e) => {
+                e.stopPropagation()
+                toastr.clear($toast)
+                forceFirmwareUpdate('jumperless', 'og')
+            })
+        }
+        return
+    }
     // Nothing answered, so nothing said which board this is: one button per
     // flashable device. The PICOBOOT flasher refuses a wrong-chip image, so a
     // wrong guess costs a click, not a board.
@@ -3929,7 +4024,7 @@ function renderJumperlessModal(update, instructions, actions) {
             const owner = parts[0], repo = parts[1]
             uf2Url = `https://github.com/${owner}/${repo}/releases/download/${update.latestVersion}/firmware.uf2`
         } catch (_) {
-            uf2Url = `https://github.com/Architeuthis-Flux/JumperlessV5/releases/download/${update.latestVersion}/firmware.uf2`
+            uf2Url = `https://github.com/Architeuthis-Flux/JumperlOS/releases/download/${update.latestVersion}/firmware.uf2`
         }
     }
 
@@ -4910,4 +5005,6 @@ window.addEventListener('beforeunload', () => {
     try { disconnectDevice() } catch (_) {}
     try { disconnectPinnedSerial() } catch (_) {}
     try { closeAllEditorSerialPorts() } catch (_) {}
+    // The schematic autosave is debounced; land it before the page goes away.
+    try { flushAutosave() } catch (_) {}
 })

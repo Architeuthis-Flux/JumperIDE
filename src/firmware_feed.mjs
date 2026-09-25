@@ -35,6 +35,18 @@ export function jumperlessBoard(machine, firmwareVersion) {
     return 'v5'
 }
 
+/**
+ * True when the serial port's USB identity is an OG Jumperless still on the
+ * original (1.3.x) firmware: ACAB:1312. JumperlOS (V5 and OG alike) is
+ * 1D50:ACAB. The original firmware has no MicroPython, so this is the only
+ * way to recognise that board - the REPL probe just times out on it.
+ * Accepts the hex strings transports.js stores or raw numbers.
+ */
+export function isOriginalOgUsb(vid, pid) {
+    const hex = (v) => typeof v === 'number' ? v.toString(16) : String(v || '').toLowerCase().replace(/^0x/, '')
+    return hex(vid) === 'acab' && hex(pid) === '1312'
+}
+
 const OG_ASSET_RE = /^firmware_og_backport\.(\d+(?:\.\d+)+)\.uf2$/i
 
 /**

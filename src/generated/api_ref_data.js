@@ -61,10 +61,12 @@ export const API_REF_HEADINGS = [
   "set_switch_position(position)",
   "check_switch_position()",
   "probe_autoconnect([enable])",
+  "probe_tap(node)",
   "clickwheel_get_position()",
   "clickwheel_reset_position()",
   "clickwheel_get_direction([consume=True])",
   "clickwheel_get_button()",
+  "clickwheel_is_initialized()",
   "get_net_name(netNum)",
   "set_net_name(netNum, name)",
   "get_net_color(netNum)",
@@ -76,17 +78,22 @@ export const API_REF_HEADINGS = [
   "get_net_nodes(netNum)",
   "get_bridge(bridgeIdx)",
   "get_net_info(netNum)",
+  "get_all_nets()",
   "get_num_paths([include_duplicates=True])",
   "get_path_info(path_idx)",
   "get_all_paths()",
   "get_path_between(node1, node2)",
+  "get_node_voltage(node)",
+  "get_net_current(netNum)",
+  "get_path_current(path_idx)",
   "pin.value([val])",
+  "FakeGpioDisconnect(node1, node2)",
   "arduino_reset()",
   "run_app(appName)",
   "pause_core2(pause)",
-  "send_raw(chip, x, y, setOrClear)",
+  "send_raw(chip, x, y, [setOrClear=1])",
   "change_terminal_color(color, [flush=True])",
-  "cycle_term_color([reset=False], [step=1.0], [flush=True])",
+  "cycle_term_color([reset=False], [step], [flush=True])",
   "force_service(name)",
   "force_service_by_index(index)",
   "get_service_index(name)",
@@ -95,6 +102,9 @@ export const API_REF_HEADINGS = [
   "context_get()",
   "get_state()",
   "set_state(json, [clear_first=True], [from_wokwi=False])",
+  "bg_start(callback, [interval_ms=50])",
+  "bg_stop()",
+  "bg_active()",
   "jfs.listdir(path)",
   "jfs.mkdir(path)",
   "jfs.rmdir(path)",
@@ -112,6 +122,8 @@ export const API_REF_HEADINGS = [
   "file.size()",
   "file.available()",
   "file.name()",
+  "file.print(*args)",
+  "file.flush()",
   "help()",
   "nodes_help()"
 ]
@@ -119,7 +131,7 @@ export const API_REF_HEADINGS = [
 export const API_REF_DESCRIPTIONS = {
   "connect": "Creates a bridge between two nodes.",
   "disconnect": "Removes a specific bridge between two nodes.",
-  "is_connected": "Checks if a direct or indirect connection exists between two nodes.",
+  "is_connected": "Checks whether a bridge exists directly between two nodes. It doesn't tell you whether they end up on the same net through other bridges - use `get_net_nodes()` or `get_net_info()` for that.",
   "nodes_clear": "Removes all connections from the board.",
   "node": "Creates a node object from a string name or integer ID. This is useful for storing a node reference in a variable.",
   "dac_set": "Sets the output voltage for a specific DAC channel.",
@@ -145,7 +157,7 @@ export const API_REF_DESCRIPTIONS = {
   "overlay_set_pixel": "Sets a single pixel directly (convenience wrapper).",
   "overlay_serialize": "Returns the current state of all overlays as a JSON string.",
   "ina_get_current": "Reads the current in Amps.",
-  "ina_get_voltage": "Reads the shunt voltage in Volts.",
+  "ina_get_voltage": "Reads the bus voltage in Volts - the same reading as `ina_get_bus_voltage()`.",
   "ina_get_bus_voltage": "Reads the bus voltage in Volts.",
   "ina_get_power": "Reads the power in Watts.",
   "oled_print": "Displays text on the OLED screen. It can print strings, numbers, and custom Jumperless types.",
@@ -171,12 +183,14 @@ export const API_REF_DESCRIPTIONS = {
   "probe_button": "Reads the state of the buttons on the probe.",
   "get_switch_position": "Gets the current probe switch position.",
   "set_switch_position": "Manually sets the probe switch position.",
-  "check_switch_position": "Checks the probe switch position using current sensing and updates the internal state.",
+  "check_switch_position": "Re-senses the probe switch position and updates the internal state.",
   "probe_autoconnect": "Gets or sets whether the probe DAC auto-connects on the routable buffer.",
+  "probe_tap": "Fakes a probe tap on a node, as if you held the tip there for about 1.2 seconds - long enough for measure mode and the highlighter to latch.",
   "clickwheel_get_position": "Gets the raw clickwheel position counter.",
   "clickwheel_reset_position": "Resets the clickwheel position counter to 0.",
   "clickwheel_get_direction": "Gets the current clickwheel direction event.",
   "clickwheel_get_button": "Gets the current clickwheel button state.",
+  "clickwheel_is_initialized": "Returns `True` if the encoder driver is up.",
   "get_net_name": "Gets the name of a specific net.",
   "set_net_name": "Sets a custom name for a net.",
   "get_net_color": "Gets the color of a net as a 32-bit RGB value.",
@@ -188,11 +202,16 @@ export const API_REF_DESCRIPTIONS = {
   "get_net_nodes": "Gets all nodes in a net as a comma-separated string.",
   "get_bridge": "Gets information about a specific bridge.",
   "get_net_info": "Gets comprehensive information about a net as a dictionary.",
+  "get_all_nets": "Gets every net as a list of dictionaries.",
   "get_num_paths": "Gets the number of routing paths currently in use.",
   "get_path_info": "Gets detailed information about a specific routing path.",
   "get_all_paths": "Gets all routing paths as a list of dictionaries.",
   "get_path_between": "Queries the routing path between two specific nodes.",
+  "get_node_voltage": "Gets the scanned voltage of any routed node.",
+  "get_net_current": "Gets the current flowing in a net's dominant path.",
+  "get_path_current": "Gets the signed current through one routing path. Uses the same index space as `get_path_info()`, so you can match currents to specific connections.",
   "pin.value": "For INPUT: Reads the current pin state (0 or 1).",
+  "fakegpiodisconnect": "A context manager that breaks a connection for the length of a `with` block, then puts it back.",
   "arduino_reset": "Resets the connected Arduino Nano.",
   "run_app": "Launches a built-in Jumperless application.",
   "pause_core2": "Pauses or resumes core2 processing.",
@@ -207,6 +226,9 @@ export const API_REF_DESCRIPTIONS = {
   "context_get": "Gets the current connection context name.",
   "get_state": "Returns the entire board state as a formatted JSON string. This includes nets, power settings, and GPIO configuration.",
   "set_state": "Applies a board state from a JSON string or, if ``from_wokwi`` is True, from a",
+  "bg_start": "Runs `callback` every `interval_ms` milliseconds while the REPL is idle. The callback gets the millisecond tick as its only argument. Intervals below 10 ms are clamped to 10. If the callback raises, the background job switches itself off. `bg_start(None)` stops it too.",
+  "bg_stop": "Stops the background callback.",
+  "bg_active": "Returns `True` while a background callback is running.",
   "jfs.listdir": "Returns a list containing the names of the entries in the directory given by `path`.",
   "jfs.mkdir": "Create a new directory.",
   "jfs.rmdir": "Remove an empty directory.",
@@ -216,14 +238,16 @@ export const API_REF_DESCRIPTIONS = {
   "jfs.stat": "Get status of a file or directory.",
   "jfs.info": "Get information about the filesystem.",
   "jfs.open": "Open a file and return a corresponding file object.",
-  "file.read": "Read `size` bytes from the file. If `size` is omitted, reads from the current position to the end of the file. Reads are capped at 8192 bytes per call, so loop if you're reading a file bigger than 8 KB.",
+  "file.read": "Read `size` bytes from the file. If `size` is omitted (or negative), reads from the current position to the end of the file - there's no per-call cap. A file too big to fit in RAM raises `MemoryError`.",
   "file.write": "Write the given string or bytes `data` to the file. Returns the number of bytes written.",
   "file.close": "Close the file. A closed file cannot be read or written to.",
   "file.seek": "Change the stream position.",
   "file.tell": "Return the current stream position.",
   "file.size": "Return the total size of the file in bytes.",
   "file.available": "Return the number of bytes available to be read from the current position to the end of the file.",
-  "file.name": "Returns the name of the file. (It's a method call, not an attribute - `f.name` gives you the bound method, not the string.)",
+  "file.name": "Returns the name of the file, or `None` once the file is closed. (It's a method call, not an attribute - `f.name` gives you the bound method, not the string.)",
+  "file.print": "Writes the arguments to the file like `print()` does, converting them to strings and adding a newline. See [Using `f.print()` for logging](#using-fprint-for-logging).",
+  "file.flush": "Commits buffered writes to flash.",
   "help": "Displays a comprehensive list of all available functions and constants in the `jumperless` module.",
   "nodes_help": "Displays a detailed reference for all available node names and their aliases."
 }
@@ -249,7 +273,7 @@ export const API_REF_ARG_HELP = {
     "3": "The bottom power rail.",
     "channel": "The DAC channel to set. DAC0, DAC1, TOP_RAIL, BOTTOM_RAIL.",
     "voltage": "The desired voltage (from -8.0V to 8.0V).",
-    "save": "If `True` (default), the setting is saved to the config file.",
+    "save": "If `True` (default), the voltage is kept in the board state so it comes back with the slot. `False` drives the DAC without touching the saved state.",
     "DAC0": "The 5V tolerant DAC output.",
     "DAC1": "The 8V tolerant DAC output.",
     "TOP_RAIL": "The top power rail.",
@@ -260,26 +284,28 @@ export const API_REF_ARG_HELP = {
   },
   "adc_get": {
     "4": "5V tolerant ADC input.",
-    "channel": "The ADC channel to read (0-4).",
+    "5": "Probe pad sense.",
+    "7": "Probe tip.",
+    "channel": "The ADC channel to read (0-7).",
     "0-3": "8V tolerant ADC inputs."
   },
   "gpio_set": {
     "pin": "The GPIO pin number (1-10).",
-    "value": "`True` for HIGH, `False` for LOW."
+    "value": "`True` for HIGH, `False` for LOW. `1`/`0`, the `HIGH`/`LOW` constants and the strings `\"HIGH\"`/`\"LOW\"` all work too."
   },
   "gpio_get": {
     "pin": "The GPIO pin number (1-10)."
   },
   "gpio_set_dir": {
     "pin": "The GPIO pin number (1-10).",
-    "direction": "`True` for OUTPUT, `False` for INPUT."
+    "direction": "`True` for OUTPUT, `False` for INPUT. The `OUTPUT`/`INPUT` constants and the strings `\"OUTPUT\"`/`\"INPUT\"` work too."
   },
   "gpio_get_dir": {
     "pin": "The GPIO pin number (1-10)."
   },
   "gpio_set_pull": {
     "pin": "The GPIO pin number (1-10).",
-    "pull": "`1` for PULLUP, `-1` for PULLDOWN, `0` for NONE."
+    "pull": "`1` for PULLUP, `-1` for PULLDOWN, `0` for NO_PULL, `2` for BUS_KEEPER (both pulls on). The strings `\"PULLUP\"`, `\"PULLDOWN\"`, `\"NO_PULL\"` and `\"BUS_KEEPER\"` work too."
   },
   "gpio_get_pull": {
     "pin": "The GPIO pin number (1-10)."
@@ -296,7 +322,7 @@ export const API_REF_ARG_HELP = {
   },
   "pwm": {
     "pin": "The GPIO pin to use (1-8).",
-    "frequency": "The PWM frequency in Hz (0.001 to 62500000). Defaults to 1000.",
+    "frequency": "The PWM frequency in Hz (0.01 to 62500000). Defaults to 1, so `pwm(pin)` on its own gives you a 1Hz blink - pass a frequency if you want anything faster.",
     "duty_cycle": "The duty cycle from 0.0 to 1.0. Defaults to 0.5."
   },
   "pwm_set_duty_cycle": {
@@ -305,7 +331,7 @@ export const API_REF_ARG_HELP = {
   },
   "pwm_set_frequency": {
     "pin": "The GPIO pin number (1-8).",
-    "frequency": "The new frequency in Hz (0.001 to 62500000)."
+    "frequency": "The new frequency in Hz (0.01 to 62500000)."
   },
   "pwm_stop": {
     "pin": "The GPIO pin number (1-8)."
@@ -406,15 +432,19 @@ export const API_REF_ARG_HELP = {
   "probe_autoconnect": {
     "enable": "`True` to enable auto-connect, `False` to disable. If omitted, returns the current state without changing it."
   },
+  "probe_tap": {
+    "node": "Node number, name, or node object. Pass `0` or less to cancel a tap that's still being held."
+  },
   "clickwheel_get_direction": {
     "consume": "If `True` (default), clears the direction after reading (one-shot detection). If `False`, the direction persists until consumed."
   },
-  "clickwheel_get_button": {
+  "clickwheel_is_initialized": {
     "wavegen_set_output(output)": "`DAC0`, `DAC1`, `TOP_RAIL`, `BOTTOM_RAIL` (default `DAC1`)",
-    "wavegen_set_freq(hz)": "0.0001–10000.0 Hz (default 100 Hz)"
+    "wavegen_set_freq(hz)": "0.0001–10000.0 Hz (default 100 Hz)",
+    "wavegen_set_sweep(start_hz, end_hz, seconds)": "the values are stored and no sweep runs. To sweep, loop `wavegen_set_freq()` yourself."
   },
   "get_net_name": {
-    "netNum": "The net number (0 to number of nets - 1)."
+    "netNum": "The net number (1 to `get_num_nets()`). Net 0 is the empty placeholder, not a net you made."
   },
   "set_net_name": {
     "netNum": "The net number.",
@@ -428,7 +458,7 @@ export const API_REF_ARG_HELP = {
   },
   "set_net_color": {
     "netNum": "The net number.",
-    "color": "Color as a name (\"red\", \"blue\", \"pink\") or hex string (\"#FF0000\", \"0xFF0000\").",
+    "color": "Color as a name (\"red\", \"blue\", \"pink\"), a hex string (\"#FF0000\", \"0xFF0000\"), an integer `0xRRGGBB`, or an `(r, g, b)` tuple or list.",
     "r": "If providing RGB values directly, pass them as separate arguments.",
     "g": "If providing RGB values directly, pass them as separate arguments.",
     "b": "If providing RGB values directly, pass them as separate arguments."
@@ -456,9 +486,18 @@ export const API_REF_ARG_HELP = {
   },
   "get_path_between": {
     "node1": "The nodes to query",
-    "node2": "The nodes to query",
+    "node2": "The nodes to query"
+  },
+  "get_node_voltage": {
+    "node": "Node number, name, or node object (e.g. `15`, `\"D2\"`, `TOP_RAIL`)"
+  },
+  "get_net_current": {
+    "netNum": "Net number (1 to `get_num_nets()`)"
+  },
+  "get_path_current": {
+    "path_idx": "Path index (0 to `get_num_paths()-1`)",
     "node": "Any routable node to read from",
-    "mode": "`j.INPUT`",
+    "mode": "`j.FAKE_GPIO_INPUT` (0) or `j.FAKE_GPIO_OUTPUT` (1). Defaults to output, which is the disabled one, so pass `j.FAKE_GPIO_INPUT` for an input. Don't use `j.INPUT` here - that's the routable-GPIO constant and it selects output.",
     "threshold_high": "Input HIGH threshold in volts (default: 2.0)",
     "threshold_low": "Input LOW threshold in volts (default: 0.8)"
   },
@@ -469,10 +508,10 @@ export const API_REF_ARG_HELP = {
     "pause": "`True` to pause core2, `False` to resume."
   },
   "send_raw": {
-    "chip": "Chip identifier (string, e.g., \"A\", \"B\", \"C\").",
-    "x": "Coordinates for the operation.",
-    "y": "Coordinates for the operation.",
-    "setOrClear": "`1` to set, `0` to clear."
+    "chip": "Chip identifier, either `\"A\"` to `\"L\"` (case doesn't matter) or the number `0` to `11`.",
+    "x": "Coordinates on that chip. `x` is 0-15, `y` is 0-7. Anything outside that prints an error and does nothing.",
+    "y": "Coordinates on that chip. `x` is 0-15, `y` is 0-7. Anything outside that prints an error and does nothing.",
+    "setOrClear": "`1` to set (default), `0` to clear."
   },
   "change_terminal_color": {
     "color": "Color index (0-255), or -1 to reset to default",
@@ -480,7 +519,7 @@ export const API_REF_ARG_HELP = {
   },
   "cycle_term_color": {
     "reset": "If `True`, reset to start of color sequence",
-    "step": "Color increment step (defaults to the last one you set)",
+    "step": "Color increment step. Leave it off and it keeps the last one you set (5.0 to start with). A step of 80 or more is ignored.",
     "flush": "Flush output immediately (default: `True`)"
   },
   "force_service": {
@@ -498,9 +537,17 @@ export const API_REF_ARG_HELP = {
   "set_state": {
     "json": "A JSON string representing the state (same format as returned by",
     "clear_first": "If `True` (default), clears all existing",
-    "from_wokwi": "If `True`, interpret `json` as a Wokwi diagram.json and",
-    "print_bridges()": "Prints all active bridges.",
-    "print_paths()": "Prints all resolved paths between nodes.",
+    "from_wokwi": "If `True`, interpret `json` as a Wokwi diagram.json and"
+  },
+  "bg_active": {
+    "history_position()": "Where you are in the history ring.",
+    "history_size()": "How many steps the ring holds.",
+    "history_label([offset": "The label of the step `offset` steps from where you are.",
+    "history_jump(position)": "Jump straight to a position. Returns `True` if it moved.",
+    "history_snapshot()": "Take a snapshot right now. Returns `True` if it took one.",
+    "history_snapshot_count()": "How many snapshots there are.",
+    "print_bridges()": "Prints the compact path listing.",
+    "print_paths()": "Prints the same compact path listing - these two do the same thing.",
     "print_crossbars()": "Prints the raw state of the crossbar matrix.",
     "print_nets()": "Prints the current net list.",
     "print_chip_status()": "Prints the status of the CH446Q chips."
@@ -557,6 +604,11 @@ export const API_REF_SYMBOLS = [
   "FakeGpioPin",
   "adc_get",
   "arduino_reset",
+  "audio_setup",
+  "audio_status",
+  "bg_active",
+  "bg_start",
+  "bg_stop",
   "button_check",
   "button_read",
   "change_terminal_color",
@@ -577,11 +629,14 @@ export const API_REF_SYMBOLS = [
   "dac_get",
   "dac_set",
   "disconnect",
+  "fakegpiodisconnect",
   "fast_connect",
   "fast_disconnect",
   "file.available",
   "file.close",
+  "file.flush",
   "file.name",
+  "file.print",
   "file.read",
   "file.seek",
   "file.size",
@@ -612,13 +667,16 @@ export const API_REF_SYMBOLS = [
   "get_ina_voltage",
   "get_net_color",
   "get_net_color_name",
+  "get_net_current",
   "get_net_info",
   "get_net_name",
   "get_net_nodes",
+  "get_node_voltage",
   "get_num_bridges",
   "get_num_nets",
   "get_num_paths",
   "get_path_between",
+  "get_path_current",
   "get_path_info",
   "get_power",
   "get_service_index",
@@ -641,6 +699,7 @@ export const API_REF_SYMBOLS = [
   "gpio_set_dir",
   "gpio_set_pull",
   "gpio_set_read_floating",
+  "guide_progress",
   "help",
   "history_jump",
   "history_label",
@@ -664,22 +723,14 @@ export const API_REF_SYMBOLS = [
   "jfs.rename",
   "jfs.rmdir",
   "jfs.stat",
-  "la_capture_single_sample",
-  "la_enable_channel",
-  "la_get_control_analog",
-  "la_get_control_digital",
-  "la_is_capturing",
-  "la_set_control_analog",
-  "la_set_control_digital",
-  "la_set_num_samples",
-  "la_set_sample_rate",
-  "la_set_trigger",
-  "la_start_continuous_capture",
-  "la_stop_capture",
+  "list_parts",
+  "load_project",
   "net_color",
+  "net_current",
   "net_info",
   "net_name",
   "node",
+  "node_voltage",
   "nodes_clear",
   "nodes_discard",
   "nodes_has_changes",
@@ -725,8 +776,13 @@ export const API_REF_SYMBOLS = [
   "overlay_set",
   "overlay_set_pixel",
   "overlay_shift",
+  "part_fingerprint",
+  "part_identify",
+  "part_vectors",
+  "path_current",
   "pause_core2",
   "pin.value",
+  "place_part",
   "print_bridges",
   "print_chip_status",
   "print_crossbars",
@@ -749,6 +805,7 @@ export const API_REF_SYMBOLS = [
   "read_button",
   "read_probe",
   "redo",
+  "remove_part",
   "run_app",
   "send_raw",
   "set_dac",
@@ -775,6 +832,16 @@ export const API_REF_SYMBOLS = [
   "stop_wavegen",
   "switch_slot",
   "undo",
+  "usb_audio_active",
+  "usb_audio_disable",
+  "usb_audio_enable",
+  "usb_audio_is_enabled",
+  "usb_audio_save",
+  "usb_audio_set_range",
+  "usb_audio_set_rate",
+  "usb_audio_setup",
+  "usb_audio_status",
+  "usb_audio_teardown",
   "wait_probe",
   "wait_touch",
   "wavegen_get_amplitude",
